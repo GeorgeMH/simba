@@ -1,0 +1,56 @@
+name: "Test Pipeline"
+
+# Map of context variables available to all steps
+# Values are evaluated as a lua templates in the order defined
+globals:
+  protocol: https
+  host: jsonplaceholder.typicode.com
+  baseUrl: "{{ ctx.protocol }}://{{ ctx.host }}"
+  timeout_ms: 500
+
+# List of steps to execute in order
+steps:
+  - desc: "Fetch Todos 1"
+    stage: "one"
+    method: "Get"
+    url: "{{ ctx.baseUrl }}/todos/1"
+    headers:
+      Content-Type: "application/json"
+    post_script: |+
+      local parsedResponse = json.decode(ctx.http_response.body_string)
+      ctx.title = parsedResponse.title
+      return true
+
+  - desc: "Fetch TODOS 2"
+    stage: "two"
+    method: "Get"
+    url: "{{ ctx.baseUrl }}/todos/1"
+    when: |+
+      os.execute("sleep 2")
+      return ctx.title ~= nil and ctx.title ~= ''
+    post_script: |+
+      os.execute("sleep 2")
+      local parsedResponse = json.decode(ctx.http_response.body_string)
+      assert(ctx.title == parsedResponse.title, "Title mismatch")
+      return true
+
+  - desc: "Fetch Todos 3"
+    stage: "one"
+    method: "Get"
+    url: "{{ ctx.baseUrl }}/todos/1"
+    headers:
+      Content-Type: "application/json"
+    post_script: |+
+      os.execute("sleep 5")
+      local parsedResponse = json.decode(ctx.http_response.body_string)
+      ctx.title = parsedResponse.title
+      return true
+
+  - desc: "Fetch TODOS 4"
+    stage: "two"
+    method: "Get"
+    url: "{{ ctx.baseUrl }}/todos/1"
+    when: "return ctx.title ~= nil and ctx.title ~= ''"
+    post_script: |+
+      os.execute("sleep 2")
+      return true

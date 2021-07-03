@@ -1,0 +1,27 @@
+[package]
+name = "simba"
+description = "Simple API Pipeline Engine"
+version = "0.1.0"
+authors = ["George Haney<george@georgemh.com>"]
+edition = "2018"
+license-file = "LICENSE.txt"
+
+[dependencies]
+log = "0.4.14"
+log4rs = "1.0.0"
+thiserror = "1.0.25"
+indicatif = "0.16.2"
+console = "0.14.1"
+tokio = { version = "1.6.1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8"
+serde_json = "1.0.64"
+clap = "3.0.0-beta.2"
+rlua = "0.17.0"
+lazy_static = "1.4.0"
+dyn-clone = "1.0.4"
+
+reqwest = "0.11.3"
+bytes = "1.0.1"
+regex = "1.5.4"
+linked-hash-map = { version = "0.5.4", features = ["serde_impl"] }
