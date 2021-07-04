@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use crate::config::{PipelineStepDef};
+use crate::config::PipelineStepDef;
 use lazy_static::lazy_static;
 
 mod executor;
@@ -19,15 +19,13 @@ lazy_static! {
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     name: String,
-    concurrent: bool,
-    stages: LinkedHashMap<String, Stage>
+    stages: LinkedHashMap<String, Stage>,
 }
 
 impl Pipeline {
-    pub fn new(name: String, concurrent: bool) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             name,
-            concurrent,
             stages: LinkedHashMap::new(),
         }
     }
@@ -40,17 +38,20 @@ impl Pipeline {
         if self.stages.contains_key(stage_name) {
             self.stages.get_mut(stage_name).unwrap()
         } else {
-            self.stages.insert(stage_name.to_string(), Stage::new(stage_name));
-            self.stages.get_mut(stage_name).expect("Failed finding newly created stage")
+            self.stages
+                .insert(stage_name.to_string(), Stage::new(stage_name));
+            self.stages
+                .get_mut(stage_name)
+                .expect("Failed finding newly created stage")
         }
     }
 
     pub fn stages(&self) -> Vec<&Stage> {
-        let mut foo = Vec::new();
+        let mut stages = Vec::new();
         for stage in self.stages.values() {
-            foo.push(stage);
+            stages.push(stage);
         }
-        foo
+        stages
     }
 }
 
@@ -90,9 +91,9 @@ impl Stage {
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum TaskState {
-    Pending,
     Executing(String),
-    Result(StepResult),
+    Skipped(String),
+    Error(String),
 }
 
 #[derive(Debug, Clone)]
@@ -138,7 +139,7 @@ pub struct HttpResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub body_string: Option<String>,
-    pub execution_time_ms: u128,
+    pub execution_time_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

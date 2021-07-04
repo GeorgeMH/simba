@@ -43,27 +43,37 @@ function M.print_environment()
     end
 end
 
-function M.eval_in_env(code)
+function M.eval_in_env_json(code)
     --M.print_environment()
 
     -- Run the Lua code and get the result.
-    func, err = load(code, "eval", "t", environment)
+    local func, err = load(code, "eval", "t", environment)
     if not func then
         --print("Failed Executing Code: " .. err)
         return err
     end
-    return func()
+    local result = func()
+    return json.encode(result)
 end
 
 function M.eval_template(template_str)
     return template.compile(template_str, environment)
 end
 
-function M.update_context_json(table, table_key, json_str)
+function M.set_as_json(table, table_key, json_str)
     table[table_key] = json.decode(json_str)
 end
 
-function M.get_context_json(table, table_key)
+function M.get_as_json(table, table_key)
+    -- TODO: This works around an issue with the json library converting an empty table to an array instead of empty object
+    -- TODO: we need to switch to a better json library or not use json at all
+    local ctx_size = 0
+    for k,v in pairs(table[table_key]) do
+        ctx_size = ctx_size + 1;
+    end
+    if ctx_size == 0 then
+        return "{}"
+    end
     local json = json.encode(table[table_key])
     return json
 end

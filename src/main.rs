@@ -17,9 +17,9 @@ use crate::output::{ConsoleWriter, JsonWriter, PipelineEventHandler};
 
 mod config;
 mod error;
-mod lua;
 mod output;
 mod pipeline;
+mod script;
 
 /// simba is a CLI based HTTP scripting engine
 #[derive(Clap, Debug)]
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         Box::new(ConsoleWriter::new()) as Box<dyn PipelineEventHandler>
     };
 
-    let executor = PipelineExecutor::new(&pipeline, output_writer).await?;
+    let executor = PipelineExecutor::new(output_writer).await?;
     executor.execute_pipeline(&pipeline).await?;
 
     Ok(())
