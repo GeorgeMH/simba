@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::pipeline::{Pipeline, Stage, StepResult, StepTask};
 
-pub use crate::output::console::ConsoleWriter;
-pub use crate::output::json::JsonWriter;
+pub use crate::event::console::ConsoleEventHandler;
+pub use crate::event::json::JsonEventHandler;
 
 mod console;
 mod json;
@@ -29,45 +29,45 @@ pub trait PipelineEventHandler: Clone + Send + Sync {
 }
 
 #[derive(Clone)]
-pub enum PipelineEventHandlerEnum {
-    Console(ConsoleWriter),
-    Json(JsonWriter),
+pub enum PipelineEventHandlerHolder {
+    Console(ConsoleEventHandler),
+    Json(JsonEventHandler),
 }
 
 #[async_trait]
-impl PipelineEventHandler for PipelineEventHandlerEnum {
+impl PipelineEventHandler for PipelineEventHandlerHolder {
     async fn pipeline_init(&self, pipeline: &Pipeline) {
         match self {
-            PipelineEventHandlerEnum::Console(h) => h.pipeline_init(pipeline).await,
-            PipelineEventHandlerEnum::Json(h) => h.pipeline_init(pipeline).await,
+            PipelineEventHandlerHolder::Console(h) => h.pipeline_init(pipeline).await,
+            PipelineEventHandlerHolder::Json(h) => h.pipeline_init(pipeline).await,
         }
     }
 
     async fn stage_start(&self, stage: &Stage) {
         match self {
-            PipelineEventHandlerEnum::Console(h) => h.stage_start(stage).await,
-            PipelineEventHandlerEnum::Json(h) => h.stage_start(stage).await,
+            PipelineEventHandlerHolder::Console(h) => h.stage_start(stage).await,
+            PipelineEventHandlerHolder::Json(h) => h.stage_start(stage).await,
         }
     }
 
     async fn task_update(&self, task: &StepTask, task_update: TaskUpdate) {
         match self {
-            PipelineEventHandlerEnum::Console(h) => h.task_update(task, task_update).await,
-            PipelineEventHandlerEnum::Json(h) => h.task_update(task, task_update).await,
+            PipelineEventHandlerHolder::Console(h) => h.task_update(task, task_update).await,
+            PipelineEventHandlerHolder::Json(h) => h.task_update(task, task_update).await,
         }
     }
 
     async fn stage_end(&self, stage: &Stage) {
         match self {
-            PipelineEventHandlerEnum::Console(h) => h.stage_end(stage).await,
-            PipelineEventHandlerEnum::Json(h) => h.stage_end(stage).await,
+            PipelineEventHandlerHolder::Console(h) => h.stage_end(stage).await,
+            PipelineEventHandlerHolder::Json(h) => h.stage_end(stage).await,
         }
     }
 
     async fn pipeline_finish(&self, pipeline: &Pipeline) {
         match self {
-            PipelineEventHandlerEnum::Console(h) => h.pipeline_finish(pipeline).await,
-            PipelineEventHandlerEnum::Json(h) => h.pipeline_finish(pipeline).await,
+            PipelineEventHandlerHolder::Console(h) => h.pipeline_finish(pipeline).await,
+            PipelineEventHandlerHolder::Json(h) => h.pipeline_finish(pipeline).await,
         }
     }
 }

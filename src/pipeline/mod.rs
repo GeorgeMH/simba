@@ -1,14 +1,23 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+
+use async_trait::async_trait;
+use lazy_static::lazy_static;
+use linked_hash_map::LinkedHashMap;
+use serde::{Deserialize, Serialize};
+
+pub use executor::PipelineExecutor;
 
 use crate::config::PipelineStepDef;
-use lazy_static::lazy_static;
+use crate::error;
+use crate::script::ScriptContext;
 
 mod executor;
-pub use executor::PipelineExecutor;
-use linked_hash_map::LinkedHashMap;
+mod http_call;
+mod post_script;
+mod render_step;
+mod when_clause;
 
 pub type NodeId = u64;
 
@@ -91,8 +100,8 @@ impl Stage {
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum TaskState {
-    Executing(String),
-    Skipped(String),
+    Complete(String),
+    Skip(String),
     Error(String),
 }
 
@@ -102,8 +111,6 @@ pub struct StepTask {
     pub parent_id: NodeId,
     pub step: PipelineStepDef,
     pub rendered_step: Option<PipelineStepDef>,
-    // TODO: Make this optional
-    pub start_time: Instant,
 }
 
 impl StepTask {
@@ -113,7 +120,6 @@ impl StepTask {
             parent_id,
             step,
             rendered_step: None,
-            start_time: Instant::now(),
         }
     }
 }
@@ -133,6 +139,22 @@ pub struct StepResult {
     pub execution_time_ms: u128,
 }
 
+impl StepResult {
+    pub fn new(
+        step: PipelineStepDef,
+        rendered_step: Option<PipelineStepDef>,
+        result: ExecutionResult,
+        execution_time_ms: u128,
+    ) -> Self {
+        Self {
+            step,
+            rendered_step,
+            result,
+            execution_time_ms,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpResponse {
     pub post_script_result: Option<bool>,
@@ -148,4 +170,13 @@ pub enum ExecutionResult {
     Response(HttpResponse),
     Skipped(String),
     Error(String),
+}
+
+#[async_trait]
+pub trait PipelineStep: Display + Send + Sync {
+    async fn apply(
+        &self,
+        script_context: &mut ScriptContext,
+        step_task: &mut StepTask,
+    ) -> error::SimbaResult<TaskState>;
 }

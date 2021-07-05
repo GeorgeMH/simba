@@ -1,6 +1,5 @@
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 use crate::Result;
 use lazy_static::lazy_static;
@@ -40,27 +39,15 @@ pub enum RequestBody {
 pub struct PipelineStepDef {
     #[serde(default = "default_description")]
     pub desc: String,
-    #[serde(default = "Default::default")]
-    pub tags: HashSet<String>,
-
     #[serde(default = "default_stage_name")]
     pub stage: String,
-
     pub when: Option<String>,
-
     pub method: HttpMethod,
     pub url: String,
     pub headers: Option<LinkedHashMap<String, String>>,
     pub timeout_ms: Option<u64>,
-
     pub body: Option<RequestBody>,
-
-    // TODO
-    // pub body_template: Option<String>,
-    // pub body_file: Option<String>,
-    // pub body_file_template: Option<String>,
     pub post_script: Option<String>,
-    // pub post_script_file: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -73,7 +60,7 @@ fn default_description() -> String {
 
 fn default_stage_name() -> String {
     let anon_id = ANONYMOUS_STAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("anon-stage-{}", anon_id)
+    format!("stage-{}", anon_id)
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]

@@ -1,19 +1,18 @@
-///
-use crate::output::{PipelineEventHandler, TaskUpdate};
+use crate::event::{PipelineEventHandler, TaskUpdate};
 use crate::pipeline::{Pipeline, Stage, StepTask};
 use async_trait::async_trait;
 
 #[derive(Clone)]
-pub struct JsonWriter {}
+pub struct JsonEventHandler {}
 
-impl JsonWriter {
+impl JsonEventHandler {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl PipelineEventHandler for JsonWriter {
+impl PipelineEventHandler for JsonEventHandler {
     async fn pipeline_init(&self, pipeline: &Pipeline) {
         log::info!("Pipeline Init {}", pipeline.name());
     }

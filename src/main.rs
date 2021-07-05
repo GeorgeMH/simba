@@ -13,13 +13,13 @@ use pipeline::PipelineExecutor;
 
 use crate::config::load_pipeline_def;
 pub use crate::error::SimbaResult as Result;
-use crate::output::{ConsoleWriter, JsonWriter, PipelineEventHandlerEnum};
+use crate::event::{ConsoleEventHandler, JsonEventHandler, PipelineEventHandlerHolder};
 use crate::script::lua::LuaScriptEngine;
 use crate::template::HandlebarsEngine;
 
 mod config;
 mod error;
-mod output;
+mod event;
 mod pipeline;
 mod script;
 mod template;
@@ -45,7 +45,7 @@ struct Opts {
     #[clap(short, long)]
     json_output: bool,
 
-    /// Path to output logs to
+    /// Path to event logs to
     #[clap(short, long)]
     log_file_path: Option<String>,
 }
@@ -53,25 +53,18 @@ struct Opts {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts: Opts = Opts::parse();
-
-    if let Err(error) = configure_logging(&opts) {
-        eprintln!("Error configuring logging: {}", error);
-        std::process::exit(1);
-    }
+    configure_logging(&opts)?;
 
     let pipeline = load_pipeline_def(&opts.pipeline)?;
 
-    let output_writer = if opts.json_output {
-        PipelineEventHandlerEnum::Json(JsonWriter::new())
-    } else {
-        PipelineEventHandlerEnum::Console(ConsoleWriter::new())
-    };
-
+    let event_handler = create_event_handler(&opts);
     let script_engine = LuaScriptEngine::new()?;
     let template_engine = HandlebarsEngine::new();
 
-    let executor = PipelineExecutor::new(output_writer, script_engine, template_engine).await?;
-    executor.execute_pipeline(&pipeline).await?;
+    let executor = PipelineExecutor::new(event_handler, script_engine, template_engine).await?;
+    executor
+        .execute_pipeline(&pipeline, &opts.stages)
+        .await?;
 
     Ok(())
 }
@@ -90,4 +83,12 @@ fn configure_logging(opts: &Opts) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn create_event_handler(opts: &Opts) -> PipelineEventHandlerHolder {
+    if opts.json_output {
+        PipelineEventHandlerHolder::Json(JsonEventHandler::new())
+    } else {
+        PipelineEventHandlerHolder::Console(ConsoleEventHandler::new())
+    }
 }
