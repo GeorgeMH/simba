@@ -1,38 +1,34 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+
 use std::time::{Duration, Instant};
 
 use linked_hash_map::LinkedHashMap;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use tokio::sync::RwLock;
 
 use crate::config::{HttpMethod, PipelineDef, PipelineStepDef, RequestBody};
-use crate::error::SimbaError;
-use crate::lua::LuaContext;
-use crate::output::PipelineEventHandler;
-use crate::pipeline::{
-    ExecutionResult, HttpResponse, Pipeline, StepResult, StepTask, TaskState,
-};
+use crate::error::{SimbaError, SimbaResult};
+use crate::output::{PipelineEventHandler, TaskUpdate};
+use crate::pipeline::{ExecutionResult, HttpResponse, Pipeline, StepResult, StepTask, TaskState};
+use crate::script::lua::LuaScriptEngine;
+use crate::script::{ScriptContext, ScriptEngine};
 use crate::Result;
+use async_trait::async_trait;
+use std::fmt::{Display, Formatter};
 
 #[derive(Clone)]
 pub struct PipelineExecutor {
     output_writer: Box<dyn PipelineEventHandler>,
-    lua: Arc<RwLock<LuaContext>>,
+    script: LuaScriptEngine,
     client: reqwest::Client,
 }
 
 impl PipelineExecutor {
-    pub async fn new(
-        pipeline: &PipelineDef,
-        output_writer: Box<dyn PipelineEventHandler>,
-    ) -> Result<PipelineExecutor> {
-        let lua = LuaContext::new()?;
-        lua.execute_named_templates(&pipeline.globals).await?;
+    pub async fn new(output_writer: Box<dyn PipelineEventHandler>) -> Result<PipelineExecutor> {
+        let script = LuaScriptEngine::new()?;
 
         Ok(PipelineExecutor {
             output_writer,
-            lua: Arc::new(RwLock::new(lua)),
+            script,
             client: reqwest::Client::new(),
         })
     }
@@ -51,181 +47,320 @@ impl PipelineExecutor {
         Ok(pipeline)
     }
 
-    pub async fn execute_pipeline(
-        &self,
-        pipeline: &PipelineDef,
-        // stages_to_exec: Vec<String>,
-    ) -> Result<()> {
-        let pipeline = Self::build_pipeline(pipeline)?;
+    pub async fn execute_pipeline(&self, pipeline_def: &PipelineDef) -> Result<()> {
+        let pipeline = Self::build_pipeline(pipeline_def)?;
 
-        self.output_writer.pipeline_init(&pipeline);
+        let mut script_context = ScriptContext::new();
+        for (key, value) in &pipeline_def.globals {
+            let response = self
+                .script
+                .template(script_context.clone(), value.as_str())
+                .await?;
+            let (updated_context, tpl_value): (ScriptContext, String) = response.result()?;
+            script_context.merge(updated_context)?;
+            script_context.set(key.as_str(), tpl_value)?;
+        }
+
+        self.output_writer.pipeline_init(&pipeline).await;
         for stage in pipeline.stages() {
-            self.output_writer.stage_start(stage);
+            self.output_writer.stage_start(stage).await;
 
-            let local_set = tokio::task::LocalSet::new();
+            let mut pending_steps = Vec::new();
 
             for task in stage.tasks() {
                 let child_self = self.clone();
-                let child_task = task.clone(); // TODO: Can we eliminate this clone
-                log::info!("Spawn Local Task {}", task.id);
-                let _foo = local_set.spawn_local(async move {
+                let mut child_task = task.clone();
+                let mut child_context = script_context.clone();
+
+                let step_join_handle = tokio::spawn(async move {
+                    // let _foo = tokio::spawn(async move {
                     let task_id = child_task.id;
                     log::info!("Child Step: {}", task_id);
-                    child_self.execute_step(child_task).await;
-                    log::info!("Finish Child Step: {}", task_id);
+                    child_self
+                        .execute_step(&mut child_task, &mut child_context)
+                        .await;
+                    child_context
                 });
+                pending_steps.push(step_join_handle);
             }
 
             log::info!("Await stage");
-            local_set.await;
+
+            for step_join_handle in pending_steps {
+                let child_context = step_join_handle.await?;
+                script_context.merge(child_context)?;
+            }
+
             log::info!("Call Stage End");
-            self.output_writer.stage_end(stage);
+            self.output_writer.stage_end(stage).await;
         }
 
-        self.output_writer.pipeline_finish(&pipeline);
+        self.output_writer.pipeline_finish(&pipeline).await;
 
         Ok(())
     }
 
-    pub async fn execute_step(&self, step_task: StepTask) {
+    pub async fn execute_step(&self, step_task: &mut StepTask, script_context: &mut ScriptContext) {
         log::info!("Pipeline Step: {}", &step_task.step.desc);
-        let mut step_task = step_task;
+
         self.output_writer
-            .task_update(&step_task, TaskState::Executing("Starting".to_string()));
-        step_task.start_time = Instant::now();
+            .task_update(&step_task, TaskUpdate::Processing("Starting".to_string())).await;
 
-        match self.render_api_step(&step_task).await {
-            // failed rendering the final step
-            Err(error) => {
-                return self
-                    .handle_error(&step_task, &error, "Failed rendering step")
-                    .await;
-            }
-            Ok(rendered_step) => {
-                step_task.rendered_step = Some(rendered_step);
+        let tasks: Vec<Box<dyn PipelineStep>> = vec![
+            Box::new(RenderPipelineStep::new(self.script.clone())),
+            Box::new(ExecuteWhenClausePipelineStep::new(self.script.clone())),
+            Box::new(HttpCallPipelineStep::new(self.client.clone())),
+            Box::new(PostScriptPipelineStep::new(self.script.clone())),
+        ];
 
-                // Test the `when` clause if it is set
-                if !self.execute_when_clause(&step_task).await {
-                    return;
-                }
-
-                match self.make_http_call(&step_task).await {
-                    Err(error) => {
-                        self.handle_error(&step_task, &error, "HTTP Error")
-                            .await
+        let start_time = Instant::now();
+        for task in tasks {
+            self.output_writer
+                .task_update(&step_task, TaskUpdate::Processing(format!("{}", task))).await;
+            let task_step_result = task.apply(script_context, step_task).await;
+            match task_step_result {
+                Ok(task_state) => match task_state {
+                    TaskState::Executing(msg) => {
+                        self.output_writer
+                            .task_update(&step_task, TaskUpdate::Processing(msg)).await;
+                        continue;
                     }
-                    Ok(response) => self.execute_post_script(&step_task, response).await,
-                }
-            }
-        }
-    }
+                    TaskState::Skipped(msg) => {
+                        let step_result = StepResult {
+                            step: step_task.step.clone(),
+                            rendered_step: step_task.rendered_step.clone(),
+                            result: ExecutionResult::Skipped(msg),
+                            execution_time_ms: start_time.elapsed().as_millis(),
+                        };
 
-    async fn handle_error(&self, step_task: &StepTask, simba_error: &SimbaError, message: &str) {
-        let msg = format!("{}: {}", message, simba_error);
+                        self.output_writer
+                            .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
+                        return;
+                    }
+                    TaskState::Error(msg) => {
+                        let step_result = StepResult {
+                            step: step_task.step.clone(),
+                            rendered_step: step_task.rendered_step.clone(),
+                            result: ExecutionResult::Error(msg),
+                            execution_time_ms: start_time.elapsed().as_millis(),
+                        };
 
-        let result = StepResult {
-            step: step_task.step.clone(),
-            rendered_step: step_task
-                .rendered_step
-                .as_ref()
-                .map(std::clone::Clone::clone),
-            result: ExecutionResult::Error(msg),
-            execution_time_ms: step_task.start_time.elapsed().as_millis(),
-        };
+                        self.output_writer
+                            .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
+                        return;
+                    }
+                },
+                Err(task_error) => {
+                    let step_result = StepResult {
+                        step: step_task.step.clone(),
+                        rendered_step: step_task.rendered_step.clone(),
+                        result: ExecutionResult::Error(format!("{}", task_error)),
+                        execution_time_ms: start_time.elapsed().as_millis(),
+                    };
 
-        self.output_writer
-            .task_update(step_task, TaskState::Result(result));
-    }
-
-    async fn execute_post_script(&self, step_task: &StepTask, response: HttpResponse) {
-        self.output_writer
-            .task_update(step_task, TaskState::Executing("Post Script".to_string()));
-        let lua = self.lua.read().await;
-        if let Err(error) = lua.set_on_context("http_response", &response).await {
-            return self
-                .handle_error(step_task, &error, "Failed updating context http_response")
-                .await;
-        }
-
-        let rendered_step = step_task
-            .rendered_step
-            .as_ref()
-            .unwrap_or_else(|| panic!("Expected Rendered Step: {}", step_task.id));
-
-        let lua = self.lua.read().await;
-
-        let post_script_result = if let Some(post_script) = rendered_step.post_script.as_ref() {
-            match lua.evaluate_bool(post_script).await {
-                Ok(post_script_result) => Some(post_script_result),
-                Err(error) => {
-                    self.handle_error(step_task, &error, "Post Script Error")
-                        .await;
+                    self.output_writer
+                        .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
                     return;
                 }
             }
-        } else {
-            None
-        };
+        }
 
-        let mut response = response;
-        response.post_script_result = post_script_result;
+        let response: HttpResponse = script_context.get("http_response").unwrap().unwrap(); // TODO: Handle this case
 
         let step_result = StepResult {
             step: step_task.step.clone(),
             rendered_step: step_task.rendered_step.clone(),
-            execution_time_ms: step_task.start_time.elapsed().as_millis(),
             result: ExecutionResult::Response(response),
+            execution_time_ms: start_time.elapsed().as_millis(),
         };
 
         self.output_writer
-            .task_update(step_task, TaskState::Result(step_result));
+            .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
     }
+}
 
-    /// Execute when clause if provided
-    async fn execute_when_clause(&self, step_task: &StepTask) -> bool {
-        self.output_writer.task_update(
-            step_task,
-            TaskState::Executing("Evaluating When".to_string()),
-        );
+fn convert_header_map(header_map: &HeaderMap) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    for (key, value) in header_map.iter() {
+        let k = key.as_str().to_owned();
+        let v = String::from_utf8_lossy(value.as_bytes()).into_owned();
+        headers.insert(k, v);
+    }
+    headers
+}
+
+#[async_trait]
+pub trait PipelineStep: Display + Send + Sync {
+    async fn apply(
+        &self,
+        script_context: &mut ScriptContext,
+        step_task: &mut StepTask,
+    ) -> Result<TaskState>;
+}
+
+struct RenderPipelineStep {
+    script: LuaScriptEngine,
+}
+
+impl RenderPipelineStep {
+    fn new(script: LuaScriptEngine) -> Self {
+        Self { script }
+    }
+}
+
+impl Display for RenderPipelineStep {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Rendering")
+    }
+}
+
+#[async_trait]
+impl PipelineStep for RenderPipelineStep {
+    async fn apply(
+        &self,
+        script_context: &mut ScriptContext,
+        step_task: &mut StepTask,
+    ) -> Result<TaskState> {
+        let (_updated_context, url): (ScriptContext, String) = self
+            .script
+            .template(script_context.clone(), &step_task.step.url)
+            .await?
+            .result()?;
+        let timeout_ms = step_task.step.timeout_ms;
+
+        let headers = match step_task.step.headers.as_ref() {
+            Some(headers) => {
+                let mut generated_headers = LinkedHashMap::new();
+                for (header, value) in headers {
+                    let (_updated_context, header): (ScriptContext, String) = self
+                        .script
+                        .template(script_context.clone(), header)
+                        .await?
+                        .result()?;
+                    let (_updated_context, value): (ScriptContext, String) = self
+                        .script
+                        .template(script_context.clone(), value)
+                        .await?
+                        .result()?;
+                    generated_headers.insert(header, value);
+                }
+                Some(generated_headers)
+            }
+            None => None,
+        };
+        let body = match &step_task.step.body {
+            Some(request_body) => {
+                let rendered_body = match request_body {
+                    RequestBody::BodyString(body) => body.clone(),
+                    RequestBody::BodyStringTemplate(template) => {
+                        let (_updated_context, rendered_body_string): (ScriptContext, String) =
+                            self.script
+                                .template(script_context.clone(), template)
+                                .await?
+                                .result()?;
+                        rendered_body_string
+                    }
+                };
+                Some(RequestBody::BodyString(rendered_body))
+            }
+            None => None,
+        };
+
+        let rendered_step = PipelineStepDef {
+            desc: step_task.step.desc.clone(),
+            method: step_task.step.method.clone(),
+            stage: step_task.step.stage.clone(),
+            url,
+            headers,
+            timeout_ms,
+            when: step_task.step.when.clone(),
+            body,
+            tags: step_task.step.tags.clone(),
+            post_script: step_task.step.post_script.clone(),
+        };
+
+        step_task.rendered_step = Some(rendered_step);
+        Ok(TaskState::Executing("Rendered".to_string()))
+    }
+}
+
+struct ExecuteWhenClausePipelineStep {
+    script: LuaScriptEngine,
+}
+
+impl ExecuteWhenClausePipelineStep {
+    fn new(script: LuaScriptEngine) -> Self {
+        Self { script }
+    }
+}
+
+impl Display for ExecuteWhenClausePipelineStep {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "When Clause")
+    }
+}
+
+#[async_trait]
+impl PipelineStep for ExecuteWhenClausePipelineStep {
+    async fn apply(
+        &self,
+        script_context: &mut ScriptContext,
+        step_task: &mut StepTask,
+    ) -> SimbaResult<TaskState> {
         let rendered_step = step_task
             .rendered_step
             .as_ref()
             .unwrap_or_else(|| panic!("Expected Rendered Step: {}", step_task.id));
 
         if let Some(when_clause) = rendered_step.when.as_ref() {
-            let lua = self.lua.read().await;
-            return match lua.evaluate_bool(when_clause).await {
-                Err(error) => {
-                    self.handle_error(step_task, &error, "Failed executing when clause")
-                        .await;
-                    false
-                }
-                Ok(result) => {
-                    if !result {
-                        let skip_message = format!(
-                            "Skipped: When clause evaluated false: {}",
-                            when_clause.replace("\n", "\\n")
-                        );
-                        let step_result = StepResult {
-                            step: step_task.step.clone(),
-                            rendered_step: step_task.rendered_step.clone(),
-                            execution_time_ms: step_task.start_time.elapsed().as_millis(),
-                            result: ExecutionResult::Skipped(skip_message),
-                        };
-                        self.output_writer
-                            .task_update(step_task, TaskState::Result(step_result))
-                    }
+            let (updated_context, when_clause_result): (ScriptContext, bool) = self
+                .script
+                .execute(script_context.clone(), when_clause)
+                .await?
+                .result()?;
+            script_context.merge(updated_context)?;
 
-                    result
-                }
-            };
+            if !when_clause_result {
+                let skip_message = format!(
+                    "Skipped: When clause evaluated false: {}",
+                    when_clause.replace("\n", "\\n")
+                );
+                return Ok(TaskState::Skipped(skip_message));
+            }
         }
 
-        true
+        Ok(TaskState::Executing("Rendered".to_string()))
     }
+}
 
-    async fn make_http_call(&self, step_task: &StepTask) -> Result<HttpResponse> {
-        let rendered_step = step_task.rendered_step.as_ref().unwrap(); // TODO
+struct HttpCallPipelineStep {
+    client: reqwest::Client,
+}
+
+impl HttpCallPipelineStep {
+    fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+}
+
+impl Display for HttpCallPipelineStep {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP Call")
+    }
+}
+
+#[async_trait]
+impl PipelineStep for HttpCallPipelineStep {
+    #[allow(clippy::cast_possible_truncation)]
+    async fn apply(
+        &self,
+        script_context: &mut ScriptContext,
+        step_task: &mut StepTask,
+    ) -> SimbaResult<TaskState> {
+        let rendered_step = step_task
+            .rendered_step
+            .as_ref()
+            .unwrap_or_else(|| panic!("Expected Rendered Step: {}", step_task.id));
 
         let start_time = Instant::now();
         let url = rendered_step.url.clone();
@@ -264,82 +399,82 @@ impl PipelineExecutor {
             }
         }
 
-        log::info!("Calling {}", url);
-        self.output_writer
-            .task_update(step_task, TaskState::Executing(format!("Calling: {}", url)));
+        log::info!("Calling URL: {}", url);
         let result = request.send().await?;
 
         let status = result.status().into();
         let headers = convert_header_map(result.headers());
 
         let body_raw = result.bytes().await?.to_vec();
+        // TODO: Support binary / non-utf8 responses
         let body_string = String::from_utf8(body_raw)?;
 
         let duration = start_time.elapsed();
 
-        Ok(HttpResponse {
-            post_script_result: None,
-            status,
-            headers,
-            body_string: Some(body_string),
-            execution_time_ms: duration.as_millis(),
-        })
-    }
+        script_context.set("call_duration_ms", duration.as_millis() as u64)?;
 
-    async fn render_api_step(&self, step_task: &StepTask) -> Result<PipelineStepDef> {
-        self.output_writer
-            .task_update(step_task, TaskState::Executing("Rendering".to_string()));
+        script_context.set(
+            "http_response",
+            HttpResponse {
+                post_script_result: None,
+                status,
+                headers,
+                body_string: Some(body_string),
+                execution_time_ms: duration.as_millis() as u64,
+            },
+        )?;
 
-        let lua = self.lua.read().await;
-        let url = lua.execute_template(&step_task.step.url).await?;
-        // let timeout_ms = step_task.rendered_step step.timeout_ms;
-        let timeout_ms = step_task.step.timeout_ms;
+        log::info!("Http Call Finished");
 
-        let headers = match step_task.step.headers.as_ref() {
-            Some(headers) => {
-                let mut generated_headers = LinkedHashMap::new();
-                for (header, value) in headers {
-                    let header = lua.execute_template(header).await?;
-                    let value = lua.execute_template(value).await?;
-                    generated_headers.insert(header.clone(), value.clone());
-                }
-                Some(generated_headers)
-            }
-            None => None,
-        };
-
-        let body = match &step_task.step.body {
-            Some(request_body) => {
-                let rendered_body = match request_body {
-                    RequestBody::BodyString(body) => body.clone(),
-                    RequestBody::BodyStringTemplate(template) => lua.execute_template(template).await?,
-                };
-                Some(RequestBody::BodyString(rendered_body))
-            }
-            None => None,
-        };
-
-        Ok(PipelineStepDef {
-            desc: step_task.step.desc.clone(),
-            method: step_task.step.method.clone(),
-            stage: step_task.step.stage.clone(),
-            url,
-            headers,
-            timeout_ms,
-            when: step_task.step.when.clone(),
-            body,
-            tags: step_task.step.tags.clone(),
-            post_script: step_task.step.post_script.clone(),
-        })
+        Ok(TaskState::Executing("HTTP Call finished".to_string()))
     }
 }
 
-fn convert_header_map(header_map: &HeaderMap) -> HashMap<String, String> {
-    let mut headers = HashMap::new();
-    for (key, value) in header_map.iter() {
-        let k = key.as_str().to_owned();
-        let v = String::from_utf8_lossy(value.as_bytes()).into_owned();
-        headers.insert(k, v);
+struct PostScriptPipelineStep {
+    script: LuaScriptEngine,
+}
+
+impl PostScriptPipelineStep {
+    fn new(script: LuaScriptEngine) -> Self {
+        Self { script }
     }
-    headers
+}
+
+impl Display for PostScriptPipelineStep {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Post Script")
+    }
+}
+
+#[async_trait]
+impl PipelineStep for PostScriptPipelineStep {
+    async fn apply(
+        &self,
+        script_context: &mut ScriptContext,
+        step_task: &mut StepTask,
+    ) -> SimbaResult<TaskState> {
+        let rendered_step = step_task
+            .rendered_step
+            .as_ref()
+            .unwrap_or_else(|| panic!("Expected Rendered Step: {}", step_task.id));
+
+        if let Some(post_script) = rendered_step.post_script.as_ref() {
+            log::info!("Calling PostScript\n{:#?}", script_context);
+            let (updated_context, post_script_result): (ScriptContext, bool) = self
+                .script
+                .execute(script_context.clone(), post_script)
+                .await?
+                .result()?;
+
+            script_context.merge(updated_context)?;
+            log::info!("Finished PostScript\n{:#?}", script_context);
+            script_context.set("post_script_result", post_script_result)?;
+
+            if !post_script_result {
+                return Ok(TaskState::Error("Post Script returned false".to_string()));
+            }
+        }
+
+        Ok(TaskState::Executing("Post Script Finished".to_string()))
+    }
 }

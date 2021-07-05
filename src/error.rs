@@ -1,3 +1,4 @@
+use crate::script::lua::LuaEvent;
 use reqwest::header::{InvalidHeaderName, InvalidHeaderValue};
 use rlua::Error as LuaError;
 use thiserror::Error;
@@ -64,6 +65,30 @@ pub enum SimbaError {
     ConfigErrors {
         #[from]
         source: log4rs::config::runtime::ConfigErrors,
+    },
+
+    #[error("Receive Error: {source}")]
+    TokioOneShotReceiveError {
+        #[from]
+        source: tokio::sync::oneshot::error::RecvError,
+    },
+
+    #[error("Receive Error: {source}")]
+    StdMpscReceiveError {
+        #[from]
+        source: std::sync::mpsc::RecvError,
+    },
+
+    #[error("Send Error: {source}")]
+    StdMpscSendError {
+        #[from]
+        source: std::sync::mpsc::SendError<LuaEvent>,
+    },
+
+    #[error("Join Error: {source}")]
+    JoinError {
+        #[from]
+        source: tokio::task::JoinError,
     },
 
     #[error("Other Error: {0}")]

@@ -1,27 +1,27 @@
+#![allow(clippy::similar_names)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-use tokio::task::JoinHandle;
-
-
-use crate::output::PipelineEventHandler;
-use crate::pipeline::{ExecutionResult, Pipeline, Stage, StepTask, TaskState};
+use crate::output::{PipelineEventHandler, TaskUpdate};
+use crate::pipeline::{ExecutionResult, Pipeline, Stage, StepTask};
+use std::time::Duration;
+use async_trait::async_trait;
 
 #[derive(Clone)]
 pub struct ConsoleWriter {
-    inner: Arc<ProgressBarWriterInner>,
+    inner: Arc<ConsoleWriterInner>,
 }
 
-struct ProgressBarWriterInner {
+struct ConsoleWriterInner {
     state: RwLock<ConsoleWriterState>,
 }
 
 struct ConsoleWriterState {
     pub multi_progress: Arc<MultiProgress>,
-    pub tick_handle: Option<JoinHandle<()>>,
     pub task_states: HashMap<u64, ConsoleTaskState>,
 }
 
@@ -32,10 +32,9 @@ struct ConsoleTaskState {
 impl ConsoleWriter {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(ProgressBarWriterInner {
+            inner: Arc::new(ConsoleWriterInner {
                 state: RwLock::new(ConsoleWriterState {
                     multi_progress: Arc::new(MultiProgress::new()),
-                    tick_handle: None,
                     task_states: HashMap::new(),
                 }),
             }),
@@ -101,31 +100,43 @@ fn update_stage_style(
     stage: &Stage,
     tick_strings: &[&str],
     _spinner_color: &str,
-    _msg_color: &str
+    _msg_color: &str,
 ) {
     let pb_style = ProgressStyle::default_spinner()
         .tick_strings(tick_strings)
         .template(&*format!(
             // "{{bar:.{}}} - Stage: {} - {{msg:.{}}}",
             "{} {{bar:20.green/yellow}} {{pos}}/{{len}}",
-            stage.name()
-            // spinner_color, stage.id(), msg_color
+            stage.name() // spinner_color, stage.id(), msg_color
         ));
     progress_bar.set_style(pb_style);
 }
 
+#[async_trait]
 impl PipelineEventHandler for ConsoleWriter {
-    fn pipeline_init(&self, pipeline: &Pipeline) {
+    async fn pipeline_init(&self, pipeline: &Pipeline) {
         let mut state = self.get_state_mut();
 
         state.multi_progress = Arc::new(MultiProgress::new());
 
         for stage in pipeline.stages() {
-            let stage_progress_bar = state.multi_progress.add(ProgressBar::new(stage.tasks().len() as u64));
-            // stage_progress_bar.enable_steady_tick(80);
-            update_stage_style(&stage_progress_bar, stage, INIT_TICK_STRINGS, INIT_TICK_STRING_COLOR, INIT_TICK_STRING_COLOR);
+            let stage_progress_bar = state
+                .multi_progress
+                .add(ProgressBar::new(stage.tasks().len() as u64));
+            update_stage_style(
+                &stage_progress_bar,
+                stage,
+                INIT_TICK_STRINGS,
+                INIT_TICK_STRING_COLOR,
+                INIT_TICK_STRING_COLOR,
+            );
             stage_progress_bar.set_message("Pending");
-            state.task_states.insert(stage.id(), ConsoleTaskState { progress_bar: stage_progress_bar });
+            state.task_states.insert(
+                stage.id(),
+                ConsoleTaskState {
+                    progress_bar: stage_progress_bar,
+                },
+            );
 
             for task in stage.tasks() {
                 let progress_bar = state.multi_progress.add(ProgressBar::new_spinner());
@@ -138,7 +149,6 @@ impl PipelineEventHandler for ConsoleWriter {
                 );
 
                 progress_bar.set_message("Pending");
-                progress_bar.enable_steady_tick(80);
 
                 state
                     .task_states
@@ -146,34 +156,57 @@ impl PipelineEventHandler for ConsoleWriter {
             }
         }
 
-        let self_clone = self.clone();
-        log::info!("Foo");
-        let join_handle = tokio::task::spawn_blocking(move || {
-            log::info!("MultiProgress.join start");
-            let _result = self_clone.get_state().multi_progress.join();
-            log::info!("MultiProgress.join end");
+        // Create a task that will "tick" each running ProgressBar until all are stopped
+        let tick_clone = self.clone();
+        tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(80));
+            loop {
+                interval.tick().await;
+                let state = tick_clone.get_state();
+                let mut all_finished = true;
+                for console_task_state in state.task_states.values() {
+                    if !console_task_state.progress_bar.is_finished() {
+                        console_task_state.progress_bar.tick();
+                        all_finished = false;
+                    }
+                }
+                if all_finished {
+                    log::info!("All progress bars finished, stopping tick");
+                    break;
+                }
+            }
         });
-        log::info!("Bar");
-        state.tick_handle = Some(join_handle);
+
+        // `MultiProgress::join` must be called to draw the progress bars
+        let self_clone = self.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = self_clone.get_state().multi_progress.join() {
+                panic!("Failed joining multi-progress bar {}", error);
+            }
+        });
     }
 
-    fn stage_start(&self, stage: &Stage) {
+    async fn stage_start(&self, stage: &Stage) {
         let state = self.get_state();
         let console_task_state = state
             .task_states
             .get(&stage.id())
             .unwrap_or_else(|| panic!("Unknown Stage: {}", stage.id()));
-        update_stage_style(&console_task_state.progress_bar, stage, EXECUTING_TICK_STRING, EXECUTING_TICK_STRING_COLOR, EXECUTING_TICK_STRING_COLOR);
+
+        update_stage_style(
+            &console_task_state.progress_bar,
+            stage,
+            EXECUTING_TICK_STRING,
+            EXECUTING_TICK_STRING_COLOR,
+            EXECUTING_TICK_STRING_COLOR,
+        );
     }
 
-    fn task_update(&self, task: &StepTask, task_state: TaskState) {
-        log::info!("Task State: {} - {:?}", task.id, task_state);
+    async fn task_update(&self, task: &StepTask, task_update: TaskUpdate) {
+        log::info!("Task State: {} - {:?}", task.id, task_update);
 
-        match task_state {
-            TaskState::Pending => {
-                todo!("Yeah")
-            }
-            TaskState::Executing(message) => {
+        match task_update {
+            TaskUpdate::Processing(message) => {
                 let state_guard = self.get_state();
                 let console_task_state = state_guard
                     .task_states
@@ -192,20 +225,22 @@ impl PipelineEventHandler for ConsoleWriter {
                     .progress_bar
                     .set_message(format!("Executing: {}", message));
             }
-            TaskState::Result(step_result) => {
+            TaskUpdate::Finished(step_result) => {
                 let state_guard = self.get_state();
 
-                let stage_task_state = state_guard
-                    .task_states
-                    .get(&task.parent_id)
-                    .unwrap_or_else(|| panic!("Unknown Parent {} on Task: {}", task.parent_id, task.id));
+                let stage_task_state =
+                    state_guard
+                        .task_states
+                        .get(&task.parent_id)
+                        .unwrap_or_else(|| {
+                            panic!("Unknown Parent {} on Task: {}", task.parent_id, task.id)
+                        });
                 stage_task_state.progress_bar.inc(1);
 
                 let console_task_state = state_guard
                     .task_states
                     .get(&task.id)
                     .unwrap_or_else(|| panic!("Unknown Task: {}", task.id));
-                console_task_state.progress_bar.disable_steady_tick();
 
                 match step_result.result {
                     ExecutionResult::Skipped(skipped_reason) => {
@@ -285,7 +320,7 @@ impl PipelineEventHandler for ConsoleWriter {
         }
     }
 
-    fn stage_end(&self, stage: &Stage) {
+    async fn stage_end(&self, stage: &Stage) {
         log::info!("Stage End: {}", stage.id());
         let state = self.get_state();
         log::info!("Got State for Stage End");
@@ -293,11 +328,19 @@ impl PipelineEventHandler for ConsoleWriter {
             .task_states
             .get(&stage.id())
             .unwrap_or_else(|| panic!("Unknown Task: {}", stage.id()));
-        update_stage_style(&console_task_state.progress_bar, stage, FINISHED_TICK_STRINGS, SUCCESS_COLOR, SUCCESS_COLOR);
-        console_task_state.progress_bar.finish_with_message("Finished");
+        update_stage_style(
+            &console_task_state.progress_bar,
+            stage,
+            FINISHED_TICK_STRINGS,
+            SUCCESS_COLOR,
+            SUCCESS_COLOR,
+        );
+        console_task_state
+            .progress_bar
+            .finish_with_message("Finished");
     }
 
-    fn pipeline_finish(&self, pipeline: &Pipeline) {
+    async fn pipeline_finish(&self, pipeline: &Pipeline) {
         log::info!("Pipeline {} finished", pipeline.name())
     }
 }
