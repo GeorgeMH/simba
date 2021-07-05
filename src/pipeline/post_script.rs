@@ -48,7 +48,7 @@ impl<S: ScriptEngine> PipelineStep for PostScriptPipelineStep<S> {
 
             let mut http_response = script_context.get_http_response()?;
             http_response.post_script_result = Some(post_script_result);
-            script_context.set_http_response(http_response);
+            script_context.set_http_response(http_response)?;
 
             if !post_script_result {
                 return Ok(TaskState::Error("Post Script returned false".to_string()));

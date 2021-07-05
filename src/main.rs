@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let opts: Opts = Opts::parse();
     configure_logging(&opts)?;
 
-    let pipeline = load_pipeline_def(&opts.pipeline)?;
+    let pipeline = load_pipeline_def(&opts.pipeline).await?;
 
     let event_handler = create_event_handler(&opts);
     let script_engine = LuaScriptEngine::new()?;

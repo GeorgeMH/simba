@@ -4,17 +4,24 @@ use serde::{Deserialize, Serialize};
 use crate::Result;
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::io::AsyncReadExt;
 
 lazy_static! {
     static ref ANONYMOUS_STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 }
 
-pub fn load_pipeline_def(pipeline_path: &str) -> Result<PipelineDef> {
+pub async fn load_pipeline_def(pipeline_path: &str) -> Result<PipelineDef> {
     log::info!("Loading pipeline file {}", pipeline_path);
-    let yaml_data = std::fs::read_to_string(pipeline_path)?;
+    let yaml_data = match pipeline_path {
+        "-" => {
+            let mut buffer = String::new();
+            tokio::io::stdin().read_to_string(&mut buffer).await?;
+            buffer
+        },
+        path=> tokio::fs::read_to_string(path).await?
+    };
 
     let pipeline = serde_yaml::from_str(&yaml_data)?;
-
     Ok(pipeline)
 }
 
