@@ -9,9 +9,8 @@ use std::collections::HashMap;
 pub mod lua;
 
 #[async_trait]
-pub trait ScriptEngine {
+pub trait ScriptEngine: Clone + Send + Sync {
     async fn execute(&self, context: ScriptContext, code: &str) -> Result<ScriptResponse>;
-    async fn template(&self, context: ScriptContext, template: &str) -> Result<ScriptResponse>;
 }
 
 #[derive(Debug)]
@@ -46,6 +45,10 @@ impl ScriptContext {
         Self {
             data: HashMap::new(),
         }
+    }
+
+    pub fn data(&self) -> &HashMap<String, Value> {
+        &self.data
     }
 
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {

@@ -15,12 +15,6 @@ pub enum LuaEvent {
         code: String,
         response: tokio::sync::oneshot::Sender<ScriptResponse>,
     },
-
-    Template {
-        context: ScriptContext,
-        template: String,
-        response: tokio::sync::oneshot::Sender<ScriptResponse>,
-    },
 }
 
 #[derive(Clone)]
@@ -56,18 +50,6 @@ impl ScriptEngine for LuaScriptEngine {
         let lua_response = receiver.await?;
         Ok(lua_response)
     }
-
-    async fn template(&self, context: ScriptContext, template: &str) -> Result<ScriptResponse> {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.inner.sender.send(LuaEvent::Template {
-            context,
-            template: template.to_string(),
-            response: sender,
-        })?;
-
-        let lua_response = receiver.await?;
-        Ok(lua_response)
-    }
 }
 
 fn start_lua_event_processor(receiver: std::sync::mpsc::Receiver<LuaEvent>) {
@@ -93,14 +75,6 @@ fn lua_event_processor(receiver: &std::sync::mpsc::Receiver<LuaEvent>) -> Result
                 let response_result = lua_context.evaluate(&context, code.as_str());
                 handle_script_response_result(response, context, response_result);
             }
-            LuaEvent::Template {
-                context,
-                template,
-                response,
-            } => {
-                let response_result = lua_context.execute_template(&context, template.as_str());
-                handle_script_response_result(response, context, response_result);
-            }
         };
     }
 }
@@ -122,7 +96,6 @@ fn handle_script_response_result(
     }
 }
 
-const LUA_TEMPLATE_ENGINE_MOD: &str = include_str!("../../lua/templates.lua");
 const LUA_JSON_MOD: &str = include_str!("../../lua/json.lua");
 const LUA_SIMBA_MOD: &str = include_str!("../../lua/simba.lua");
 
@@ -140,7 +113,6 @@ impl LuaContext {
 
         lua.context(|ctx| {
             let globals = ctx.globals();
-            load_lua_module(ctx, &globals, "template", LUA_TEMPLATE_ENGINE_MOD)?;
             load_lua_module(ctx, &globals, "json", LUA_JSON_MOD)?;
             load_lua_module(ctx, &globals, "simba", LUA_SIMBA_MOD)?;
             init_environment(ctx)?;
@@ -181,26 +153,6 @@ impl LuaContext {
             })
         })?)
     }
-
-    ///
-    /// Executes the given lua template and returns the result as a string.
-    ///
-    pub fn execute_template(
-        &self,
-        script_context: &ScriptContext,
-        lua_template: &str,
-    ) -> Result<ScriptResponse> {
-        let lua = self.get_lua();
-        Ok(lua.context(|ctx| {
-            set_script_context(ctx, script_context)?;
-            let result = execute_lua_template(ctx, lua_template)?;
-            let serde_value = serde_json::to_value(result).map_err(|err| {
-                rlua::Error::RuntimeError(format!("Execute Template Json Error: {}", err))
-            })?;
-            let updated_context = get_script_context(ctx)?;
-            LuaResult::Ok(ScriptResponse::new(updated_context, Ok(serde_value)))
-        })?)
-    }
 }
 
 fn set_script_context(ctx: Context, script_context: &ScriptContext) -> LuaResult<()> {
@@ -225,13 +177,6 @@ fn get_script_context(ctx: Context) -> LuaResult<ScriptContext> {
     LuaResult::Ok(ScriptContext {
         data: script_context_data,
     })
-}
-
-fn execute_lua_template(ctx: Context, lua_template: &str) -> LuaResult<String> {
-    let eval_template: Function = get_simba_function(&ctx.globals(), "eval_template")?;
-    let rendered_string: String = eval_template.call(lua_template)?;
-    log::trace!("Rendered String: {}={}", lua_template, rendered_string);
-    LuaResult::Ok(rendered_string)
 }
 
 fn load_lua_module<'lua>(

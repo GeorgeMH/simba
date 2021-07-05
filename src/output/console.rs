@@ -8,8 +8,8 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::output::{PipelineEventHandler, TaskUpdate};
 use crate::pipeline::{ExecutionResult, Pipeline, Stage, StepTask};
-use std::time::Duration;
 use async_trait::async_trait;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct ConsoleWriter {
