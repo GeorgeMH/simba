@@ -9,26 +9,35 @@ use crate::config::{HttpMethod, PipelineDef, PipelineStepDef, RequestBody};
 use crate::error::{SimbaError, SimbaResult};
 use crate::output::{PipelineEventHandler, TaskUpdate};
 use crate::pipeline::{ExecutionResult, HttpResponse, Pipeline, StepResult, StepTask, TaskState};
-use crate::script::lua::LuaScriptEngine;
 use crate::script::{ScriptContext, ScriptEngine};
+use crate::template::TemplateEngine;
 use crate::Result;
 use async_trait::async_trait;
 use std::fmt::{Display, Formatter};
 
 #[derive(Clone)]
-pub struct PipelineExecutor {
-    output_writer: Box<dyn PipelineEventHandler>,
-    script: LuaScriptEngine,
+pub struct PipelineExecutor<E: PipelineEventHandler, S: ScriptEngine, T: TemplateEngine> {
+    output_writer: E,
+    script: S,
+    template: T,
     client: reqwest::Client,
 }
 
-impl PipelineExecutor {
-    pub async fn new(output_writer: Box<dyn PipelineEventHandler>) -> Result<PipelineExecutor> {
-        let script = LuaScriptEngine::new()?;
-
+impl<E, S, T> PipelineExecutor<E, S, T>
+where
+    E: PipelineEventHandler + 'static,
+    S: ScriptEngine + 'static,
+    T: TemplateEngine + 'static,
+{
+    pub async fn new(
+        output_writer: E,
+        script: S,
+        template: T,
+    ) -> Result<PipelineExecutor<E, S, T>> {
         Ok(PipelineExecutor {
             output_writer,
             script,
+            template,
             client: reqwest::Client::new(),
         })
     }
@@ -52,12 +61,7 @@ impl PipelineExecutor {
 
         let mut script_context = ScriptContext::new();
         for (key, value) in &pipeline_def.globals {
-            let response = self
-                .script
-                .template(script_context.clone(), value.as_str())
-                .await?;
-            let (updated_context, tpl_value): (ScriptContext, String) = response.result()?;
-            script_context.merge(updated_context)?;
+            let tpl_value = self.template.template(value.as_str(), &script_context)?;
             script_context.set(key.as_str(), tpl_value)?;
         }
 
@@ -68,14 +72,12 @@ impl PipelineExecutor {
             let mut pending_steps = Vec::new();
 
             for task in stage.tasks() {
-                let child_self = self.clone();
+                let child_self: PipelineExecutor<E, S, T> = self.clone();
                 let mut child_task = task.clone();
                 let mut child_context = script_context.clone();
 
                 let step_join_handle = tokio::spawn(async move {
-                    // let _foo = tokio::spawn(async move {
-                    let task_id = child_task.id;
-                    log::info!("Child Step: {}", task_id);
+                    log::info!("Child Step: {}", child_task.id);
                     child_self
                         .execute_step(&mut child_task, &mut child_context)
                         .await;
@@ -104,10 +106,11 @@ impl PipelineExecutor {
         log::info!("Pipeline Step: {}", &step_task.step.desc);
 
         self.output_writer
-            .task_update(&step_task, TaskUpdate::Processing("Starting".to_string())).await;
+            .task_update(&step_task, TaskUpdate::Processing("Starting".to_string()))
+            .await;
 
         let tasks: Vec<Box<dyn PipelineStep>> = vec![
-            Box::new(RenderPipelineStep::new(self.script.clone())),
+            Box::new(RenderPipelineStep::new(self.template.clone())),
             Box::new(ExecuteWhenClausePipelineStep::new(self.script.clone())),
             Box::new(HttpCallPipelineStep::new(self.client.clone())),
             Box::new(PostScriptPipelineStep::new(self.script.clone())),
@@ -116,13 +119,15 @@ impl PipelineExecutor {
         let start_time = Instant::now();
         for task in tasks {
             self.output_writer
-                .task_update(&step_task, TaskUpdate::Processing(format!("{}", task))).await;
+                .task_update(&step_task, TaskUpdate::Processing(format!("{}", task)))
+                .await;
             let task_step_result = task.apply(script_context, step_task).await;
             match task_step_result {
                 Ok(task_state) => match task_state {
                     TaskState::Executing(msg) => {
                         self.output_writer
-                            .task_update(&step_task, TaskUpdate::Processing(msg)).await;
+                            .task_update(&step_task, TaskUpdate::Processing(msg))
+                            .await;
                         continue;
                     }
                     TaskState::Skipped(msg) => {
@@ -134,7 +139,8 @@ impl PipelineExecutor {
                         };
 
                         self.output_writer
-                            .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
+                            .task_update(&step_task, TaskUpdate::Finished(step_result))
+                            .await;
                         return;
                     }
                     TaskState::Error(msg) => {
@@ -146,7 +152,8 @@ impl PipelineExecutor {
                         };
 
                         self.output_writer
-                            .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
+                            .task_update(&step_task, TaskUpdate::Finished(step_result))
+                            .await;
                         return;
                     }
                 },
@@ -159,7 +166,8 @@ impl PipelineExecutor {
                     };
 
                     self.output_writer
-                        .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
+                        .task_update(&step_task, TaskUpdate::Finished(step_result))
+                        .await;
                     return;
                 }
             }
@@ -175,7 +183,8 @@ impl PipelineExecutor {
         };
 
         self.output_writer
-            .task_update(&step_task, TaskUpdate::Finished(step_result)).await;
+            .task_update(&step_task, TaskUpdate::Finished(step_result))
+            .await;
     }
 }
 
@@ -198,50 +207,40 @@ pub trait PipelineStep: Display + Send + Sync {
     ) -> Result<TaskState>;
 }
 
-struct RenderPipelineStep {
-    script: LuaScriptEngine,
+struct RenderPipelineStep<T: TemplateEngine> {
+    template: T,
 }
 
-impl RenderPipelineStep {
-    fn new(script: LuaScriptEngine) -> Self {
-        Self { script }
+impl<T: TemplateEngine> RenderPipelineStep<T> {
+    fn new(template: T) -> Self {
+        Self { template }
     }
 }
 
-impl Display for RenderPipelineStep {
+impl<T: TemplateEngine> Display for RenderPipelineStep<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Rendering")
+        write!(f, "Rendering Step")
     }
 }
 
 #[async_trait]
-impl PipelineStep for RenderPipelineStep {
+impl<T: TemplateEngine> PipelineStep for RenderPipelineStep<T> {
     async fn apply(
         &self,
         script_context: &mut ScriptContext,
         step_task: &mut StepTask,
     ) -> Result<TaskState> {
-        let (_updated_context, url): (ScriptContext, String) = self
-            .script
-            .template(script_context.clone(), &step_task.step.url)
-            .await?
-            .result()?;
+        let url = self
+            .template
+            .template(&step_task.step.url, &script_context)?;
         let timeout_ms = step_task.step.timeout_ms;
 
         let headers = match step_task.step.headers.as_ref() {
             Some(headers) => {
                 let mut generated_headers = LinkedHashMap::new();
                 for (header, value) in headers {
-                    let (_updated_context, header): (ScriptContext, String) = self
-                        .script
-                        .template(script_context.clone(), header)
-                        .await?
-                        .result()?;
-                    let (_updated_context, value): (ScriptContext, String) = self
-                        .script
-                        .template(script_context.clone(), value)
-                        .await?
-                        .result()?;
+                    let header = self.template.template(header, &script_context)?;
+                    let value = self.template.template(value, &script_context)?;
                     generated_headers.insert(header, value);
                 }
                 Some(generated_headers)
@@ -253,12 +252,7 @@ impl PipelineStep for RenderPipelineStep {
                 let rendered_body = match request_body {
                     RequestBody::BodyString(body) => body.clone(),
                     RequestBody::BodyStringTemplate(template) => {
-                        let (_updated_context, rendered_body_string): (ScriptContext, String) =
-                            self.script
-                                .template(script_context.clone(), template)
-                                .await?
-                                .result()?;
-                        rendered_body_string
+                        self.template.template(template, &script_context)?
                     }
                 };
                 Some(RequestBody::BodyString(rendered_body))
@@ -284,24 +278,24 @@ impl PipelineStep for RenderPipelineStep {
     }
 }
 
-struct ExecuteWhenClausePipelineStep {
-    script: LuaScriptEngine,
+struct ExecuteWhenClausePipelineStep<S: ScriptEngine> {
+    script: S,
 }
 
-impl ExecuteWhenClausePipelineStep {
-    fn new(script: LuaScriptEngine) -> Self {
+impl<S: ScriptEngine> ExecuteWhenClausePipelineStep<S> {
+    fn new(script: S) -> Self {
         Self { script }
     }
 }
 
-impl Display for ExecuteWhenClausePipelineStep {
+impl<S: ScriptEngine> Display for ExecuteWhenClausePipelineStep<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "When Clause")
     }
 }
 
 #[async_trait]
-impl PipelineStep for ExecuteWhenClausePipelineStep {
+impl<S: ScriptEngine> PipelineStep for ExecuteWhenClausePipelineStep<S> {
     async fn apply(
         &self,
         script_context: &mut ScriptContext,
@@ -430,24 +424,24 @@ impl PipelineStep for HttpCallPipelineStep {
     }
 }
 
-struct PostScriptPipelineStep {
-    script: LuaScriptEngine,
+struct PostScriptPipelineStep<S: ScriptEngine> {
+    script: S,
 }
 
-impl PostScriptPipelineStep {
-    fn new(script: LuaScriptEngine) -> Self {
+impl<S: ScriptEngine> PostScriptPipelineStep<S> {
+    fn new(script: S) -> Self {
         Self { script }
     }
 }
 
-impl Display for PostScriptPipelineStep {
+impl<S: ScriptEngine> Display for PostScriptPipelineStep<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Post Script")
     }
 }
 
 #[async_trait]
-impl PipelineStep for PostScriptPipelineStep {
+impl<S: ScriptEngine> PipelineStep for PostScriptPipelineStep<S> {
     async fn apply(
         &self,
         script_context: &mut ScriptContext,

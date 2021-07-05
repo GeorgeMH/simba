@@ -91,6 +91,12 @@ pub enum SimbaError {
         source: tokio::task::JoinError,
     },
 
+    #[error(transparent)]
+    RenderError {
+        #[from]
+        source: handlebars::RenderError,
+    },
+
     #[error("Other Error: {0}")]
     Other(String),
 }

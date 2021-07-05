@@ -20,7 +20,6 @@ function M.init_environment()
 
     env.json = json
     env._G = env
-
     env.simba = M
 
     -- overall state for the execution

@@ -13,13 +13,16 @@ use pipeline::PipelineExecutor;
 
 use crate::config::load_pipeline_def;
 pub use crate::error::SimbaResult as Result;
-use crate::output::{ConsoleWriter, JsonWriter, PipelineEventHandler};
+use crate::output::{ConsoleWriter, JsonWriter, PipelineEventHandlerEnum};
+use crate::script::lua::LuaScriptEngine;
+use crate::template::HandlebarsEngine;
 
 mod config;
 mod error;
 mod output;
 mod pipeline;
 mod script;
+mod template;
 
 /// simba is a CLI based HTTP scripting engine
 #[derive(Clap, Debug)]
@@ -59,12 +62,15 @@ async fn main() -> Result<()> {
     let pipeline = load_pipeline_def(&opts.pipeline)?;
 
     let output_writer = if opts.json_output {
-        Box::new(JsonWriter::new()) as Box<dyn PipelineEventHandler>
+        PipelineEventHandlerEnum::Json(JsonWriter::new())
     } else {
-        Box::new(ConsoleWriter::new()) as Box<dyn PipelineEventHandler>
+        PipelineEventHandlerEnum::Console(ConsoleWriter::new())
     };
 
-    let executor = PipelineExecutor::new(output_writer).await?;
+    let script_engine = LuaScriptEngine::new()?;
+    let template_engine = HandlebarsEngine::new();
+
+    let executor = PipelineExecutor::new(output_writer, script_engine, template_engine).await?;
     executor.execute_pipeline(&pipeline).await?;
 
     Ok(())

@@ -5,7 +5,7 @@ name: "Test Pipeline"
 globals:
   protocol: https
   host: jsonplaceholder.typicode.com
-  baseUrl: "{{ ctx.protocol }}://{{ ctx.host }}"
+  baseUrl: "{{ protocol }}://{{ host }}"
   timeout_ms: 500
 
 # List of steps to execute in order
@@ -13,7 +13,7 @@ steps:
   - desc: "Fetch Todos 1"
     stage: "one"
     method: "Get"
-    url: "{{ ctx.baseUrl }}/todos/1"
+    url: "{{ baseUrl }}/todos/1"
     headers:
       Content-Type: "application/json"
     post_script: |+
@@ -24,7 +24,7 @@ steps:
   - desc: "Fetch TODOS 2"
     stage: "two"
     method: "Get"
-    url: "{{ ctx.baseUrl }}/todos/1"
+    url: "{{ baseUrl }}/todos/1"
     when: |+
       os.execute("sleep 2")
       return ctx.title ~= nil and ctx.title ~= ''
@@ -37,7 +37,7 @@ steps:
   - desc: "Fetch Todos 3"
     stage: "one"
     method: "Get"
-    url: "{{ ctx.baseUrl }}/todos/1"
+    url: "{{ baseUrl }}/todos/1"
     headers:
       Content-Type: "application/json"
     post_script: |+
@@ -49,7 +49,7 @@ steps:
   - desc: "Fetch TODOS 4"
     stage: "two"
     method: "Get"
-    url: "{{ ctx.baseUrl }}/todos/1"
+    url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
     post_script: |+
       os.execute("sleep 2")
