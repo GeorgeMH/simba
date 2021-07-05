@@ -90,7 +90,6 @@ impl PipelineStep for HttpCallPipelineStep {
         let duration = start_time.elapsed();
 
         script_context.set("call_duration_ms", duration.as_millis() as u64)?;
-
         script_context.set(
             "http_response",
             HttpResponse {

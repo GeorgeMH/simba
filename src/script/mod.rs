@@ -1,10 +1,11 @@
 use crate::Result;
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use crate::pipeline::HttpResponse;
+use crate::error::SimbaError;
 
 pub mod lua;
 
@@ -35,7 +36,7 @@ impl ScriptResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScriptContext {
     data: HashMap<String, Value>,
 }
@@ -49,6 +50,19 @@ impl ScriptContext {
 
     pub fn data(&self) -> &HashMap<String, Value> {
         &self.data
+    }
+
+    pub fn get_http_response(&self) -> Result<HttpResponse> {
+        self.get_required("http_response")
+    }
+
+    pub fn set_http_response(&mut self, http_response: HttpResponse) -> Result<Option<HttpResponse>> {
+        self.set("http_response", http_response)
+    }
+
+    pub fn get_required<T: DeserializeOwned>(&self, key: &str) -> Result<T> {
+        let maybe_t = self.get(key)?;
+        maybe_t.ok_or_else(|| SimbaError::Other(format!("Expected {} in script context", key)))
     }
 
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {

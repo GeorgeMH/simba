@@ -128,7 +128,7 @@ where
                 .await;
 
             match task.apply(script_context, step_task).await {
-                // The step was processed successfully, and processing should continue
+                // The step was processed successfully, and processing should continue to the next step
                 Ok(TaskState::Complete(msg)) => {
                     self.event_handler
                         .task_update(&step_task, TaskUpdate::Processing(msg))

@@ -14,10 +14,10 @@ use crate::error;
 use crate::script::ScriptContext;
 
 mod executor;
-mod http_call;
-mod post_script;
 mod render_step;
 mod when_clause;
+mod http_call;
+mod post_script;
 
 pub type NodeId = u64;
 
@@ -56,11 +56,7 @@ impl Pipeline {
     }
 
     pub fn stages(&self) -> Vec<&Stage> {
-        let mut stages = Vec::new();
-        for stage in self.stages.values() {
-            stages.push(stage);
-        }
-        stages
+        self.stages.values().collect()
     }
 }
 

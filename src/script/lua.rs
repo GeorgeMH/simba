@@ -103,7 +103,7 @@ const SIMBA: &str = "simba";
 
 const ENVIRONMENT_NAME: &str = "environment";
 
-pub(crate) struct LuaContext {
+struct LuaContext {
     lua: RwLock<Lua>,
 }
 
