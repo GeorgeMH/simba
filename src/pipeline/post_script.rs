@@ -39,7 +39,7 @@ impl<S: ScriptEngine> PipelineStep for PostScriptPipelineStep<S> {
             log::info!("Calling PostScript\n{:#?}", script_context);
             let (updated_context, post_script_result): (ScriptContext, bool) = self
                 .script
-                .execute(script_context.clone(), post_script)
+                .execute(script_context.clone(), "post_script", post_script)
                 .await?
                 .result()?;
 

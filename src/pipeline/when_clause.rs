@@ -38,7 +38,7 @@ impl<S: ScriptEngine> PipelineStep for ExecuteWhenClausePipelineStep<S> {
         if let Some(when_clause) = rendered_step.when.as_ref() {
             let (updated_context, when_clause_result): (ScriptContext, bool) = self
                 .script
-                .execute(script_context.clone(), when_clause)
+                .execute(script_context.clone(), "when_clause", when_clause)
                 .await?
                 .result()?;
             script_context.merge(updated_context)?;

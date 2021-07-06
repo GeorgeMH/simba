@@ -11,7 +11,7 @@ pub mod lua;
 
 #[async_trait]
 pub trait ScriptEngine: Clone + Send + Sync {
-    async fn execute(&self, context: ScriptContext, code: &str) -> Result<ScriptResponse>;
+    async fn execute(&self, context: ScriptContext, chunk_name: &str, code: &str) -> Result<ScriptResponse>;
 }
 
 #[derive(Debug)]

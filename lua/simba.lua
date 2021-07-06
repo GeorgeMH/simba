@@ -42,21 +42,15 @@ function M.print_environment()
     end
 end
 
-function M.eval_in_env_json(code)
+function M.eval_in_env_json(chunkName, code)
     --M.print_environment()
-
     -- Run the Lua code and get the result.
-    local func, err = load(code, "eval", "t", environment)
+    local func, err = load(code, chunkName, "t", environment)
     if not func then
-        --print("Failed Executing Code: " .. err)
         return err
     end
     local result = func()
     return json.encode(result)
-end
-
-function M.eval_template(template_str)
-    return template.compile(template_str, environment)
 end
 
 function M.set_as_json(table, table_key, json_str)

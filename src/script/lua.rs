@@ -12,6 +12,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 pub enum LuaEvent {
     Execute {
         context: ScriptContext,
+        chunk_name: String,
         code: String,
         response: tokio::sync::oneshot::Sender<ScriptResponse>,
     },
@@ -39,10 +40,11 @@ impl LuaScriptEngine {
 
 #[async_trait]
 impl ScriptEngine for LuaScriptEngine {
-    async fn execute(&self, context: ScriptContext, code: &str) -> Result<ScriptResponse> {
+    async fn execute(&self, context: ScriptContext, chunk_name: &str, code: &str) -> Result<ScriptResponse> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.inner.sender.send(LuaEvent::Execute {
             context,
+            chunk_name: chunk_name.to_string(),
             code: code.to_string(),
             response: sender,
         })?;
@@ -69,10 +71,11 @@ fn lua_event_processor(receiver: &std::sync::mpsc::Receiver<LuaEvent>) -> Result
         match event {
             LuaEvent::Execute {
                 context,
+                chunk_name,
                 code,
                 response,
             } => {
-                let response_result = lua_context.evaluate(&context, code.as_str());
+                let response_result = lua_context.evaluate(&context, &chunk_name, code.as_str());
                 handle_script_response_result(response, context, response_result);
             }
         };
@@ -132,6 +135,7 @@ impl LuaContext {
     pub fn evaluate(
         &self,
         script_context: &ScriptContext,
+        chunk_name: &str,
         lua_code: &str,
     ) -> Result<ScriptResponse> {
         let lua = self.get_lua();
@@ -139,7 +143,7 @@ impl LuaContext {
             set_script_context(ctx, &script_context)?;
 
             let eval_in_env: Function = get_simba_function(&ctx.globals(), "eval_in_env_json")?;
-            let json_str: String = eval_in_env.call(lua_code)?;
+            let json_str: String = eval_in_env.call((chunk_name, lua_code))?;
 
             let script_context = get_script_context(ctx)?;
 
