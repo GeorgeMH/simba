@@ -45,6 +45,10 @@ struct Opts {
     #[clap(short, long)]
     json_output: bool,
 
+    /// Verbose output
+    #[clap(short, long)]
+    verbose: bool,
+
     /// Path to event logs to
     #[clap(short, long)]
     log_file_path: Option<String>,
@@ -62,9 +66,7 @@ async fn main() -> Result<()> {
     let template_engine = HandlebarsEngine::new();
 
     let executor = PipelineExecutor::new(event_handler, script_engine, template_engine).await?;
-    executor
-        .execute_pipeline(&pipeline, &opts.stages)
-        .await?;
+    executor.execute_pipeline(&pipeline, &opts.stages).await?;
 
     Ok(())
 }
@@ -89,6 +91,6 @@ fn create_event_handler(opts: &Opts) -> PipelineEventHandlerHolder {
     if opts.json_output {
         PipelineEventHandlerHolder::Json(JsonEventHandler::new())
     } else {
-        PipelineEventHandlerHolder::Console(ConsoleEventHandler::new())
+        PipelineEventHandlerHolder::Console(ConsoleEventHandler::new(opts.verbose))
     }
 }

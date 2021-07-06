@@ -1,11 +1,11 @@
+use crate::error::SimbaError;
+use crate::pipeline::HttpResponse;
 use crate::Result;
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::pipeline::HttpResponse;
-use crate::error::SimbaError;
 
 pub mod lua;
 
@@ -56,7 +56,10 @@ impl ScriptContext {
         self.get_required("http_response")
     }
 
-    pub fn set_http_response(&mut self, http_response: HttpResponse) -> Result<Option<HttpResponse>> {
+    pub fn set_http_response(
+        &mut self,
+        http_response: HttpResponse,
+    ) -> Result<Option<HttpResponse>> {
         self.set("http_response", http_response)
     }
 

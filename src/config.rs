@@ -2,13 +2,7 @@ use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use lazy_static::lazy_static;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::AsyncReadExt;
-
-lazy_static! {
-    static ref ANONYMOUS_STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
-}
 
 pub async fn load_pipeline_def(pipeline_path: &str) -> Result<PipelineDef> {
     log::info!("Loading pipeline file {}", pipeline_path);
@@ -17,23 +11,38 @@ pub async fn load_pipeline_def(pipeline_path: &str) -> Result<PipelineDef> {
             let mut buffer = String::new();
             tokio::io::stdin().read_to_string(&mut buffer).await?;
             buffer
-        },
-        path=> tokio::fs::read_to_string(path).await?
+        }
+        path => tokio::fs::read_to_string(path).await?,
     };
 
     let pipeline = serde_yaml::from_str(&yaml_data)?;
     Ok(pipeline)
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDef {
     pub name: String,
     pub globals: LinkedHashMap<String, String>,
 
+    pub stages: Vec<StageDef>,
+
+    #[serde(default = "default_steps")]
     pub steps: Vec<PipelineStepDef>,
 
     #[serde(default = "default_true")]
     pub stop_on_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageDef {
+    #[serde(default = "default_stage_name")]
+    pub name: String,
+
+    #[serde(default = "default_false")]
+    pub concurrent: bool,
+
+    #[serde(default = "default_steps")]
+    pub steps: Vec<PipelineStepDef>,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -57,8 +66,20 @@ pub struct PipelineStepDef {
     pub post_script: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub enum HttpMethod {
+    Post,
+    Get,
+    Put,
+    Delete,
+}
+
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_description() -> String {
@@ -66,14 +87,9 @@ fn default_description() -> String {
 }
 
 fn default_stage_name() -> String {
-    let anon_id = ANONYMOUS_STAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("stage-{}", anon_id)
+    "default".to_string()
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub enum HttpMethod {
-    Post,
-    Get,
-    Put,
-    Delete,
+fn default_steps() -> Vec<PipelineStepDef> {
+    Vec::new()
 }
