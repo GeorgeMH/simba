@@ -47,10 +47,29 @@ where
         let stage_name_predicate =
             |s: &String| stages_to_exec.is_empty() || stages_to_exec.contains(s);
 
+        for stage_def in &pipeline_def.stages {
+            let mut stage = pipeline.stage(&stage_def.name);
+            stage.concurrent = stage_def.concurrent;
+            for step_def in &stage_def.steps {
+                let mut task_step_def = step_def.clone();
+                if task_step_def.stage != stage.name {
+                    // TODO: Should this be a fatal error
+                    log::error!(
+                        "Step Def {} defined with mismatching stage name {} in stage {}",
+                        step_def.desc,
+                        step_def.stage,
+                        stage.name
+                    );
+                    task_step_def.stage = stage.name.clone();
+                }
+                stage.add_task(StepTask::new(task_step_def, stage.id))
+            }
+        }
+
         for step in &pipeline_def.steps {
             if stage_name_predicate(&step.stage) {
-                let stage = pipeline.get_stage(step.stage.as_str());
-                stage.add_task(StepTask::new(step.clone(), stage.id()));
+                let stage = pipeline.stage(step.stage.as_str());
+                stage.add_task(StepTask::new(step.clone(), stage.id));
             }
         }
 
@@ -62,8 +81,7 @@ where
         pipeline_def: &PipelineDef,
         stages_to_exec: &[String],
     ) -> Result<()> {
-        let pipeline = Self::build_pipeline(pipeline_def, stages_to_exec)?;
-
+        let mut pipeline = Self::build_pipeline(pipeline_def, stages_to_exec)?;
         let mut script_context = ScriptContext::new();
         for (key, value) in &pipeline_def.globals {
             let tpl_value = self.template.render(value.as_str(), &script_context)?;
@@ -71,31 +89,36 @@ where
         }
 
         self.event_handler.pipeline_init(&pipeline).await;
-        for stage in pipeline.stages() {
+        for stage in pipeline.stages_mut() {
             self.event_handler.stage_start(stage).await;
 
             let mut pending_steps = Vec::new();
 
-            for task in stage.tasks() {
-                let child_self: PipelineExecutor<E, S, T> = self.clone();
-                let mut child_task = task.clone();
-                let mut child_context = script_context.clone();
+            if stage.concurrent {
+                for step_task in &mut stage.tasks {
+                    let child_self: PipelineExecutor<E, S, T> = self.clone();
+                    let mut child_task = step_task.clone();
+                    let mut child_context = script_context.clone();
 
-                let step_join_handle = tokio::spawn(async move {
-                    log::info!("Child Step: {}", child_task.id);
-                    child_self
-                        .execute_step(&mut child_task, &mut child_context)
-                        .await;
-                    child_context
-                });
-                pending_steps.push(step_join_handle);
-            }
-
-            log::info!("Await stage");
-
-            for step_join_handle in pending_steps {
-                let child_context = step_join_handle.await?;
-                script_context.merge(child_context)?;
+                    let step_join_handle = tokio::spawn(async move {
+                        log::info!("Concurrent Child Step: {}", child_task.id);
+                        child_self
+                            .execute_step(&mut child_task, &mut child_context)
+                            .await;
+                        child_context
+                    });
+                    pending_steps.push(step_join_handle);
+                }
+                // TODO: Is there a dynamic version of tokio::join() ?
+                for step_join_handle in pending_steps {
+                    let child_context = step_join_handle.await?;
+                    script_context.merge(child_context)?;
+                }
+            } else {
+                for step_task in &mut stage.tasks {
+                    log::info!("Executing Child Step: {}", step_task.id);
+                    self.execute_step(step_task, &mut script_context).await;
+                }
             }
 
             log::info!("Call Stage End");

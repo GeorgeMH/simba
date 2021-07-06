@@ -18,7 +18,7 @@ impl PipelineEventHandler for JsonEventHandler {
     }
 
     async fn stage_start(&self, stage: &Stage) {
-        log::info!("Stage Start {}", stage.id());
+        log::info!("Stage Start {}", stage.id);
     }
 
     async fn task_update(&self, task: &StepTask, task_update: TaskUpdate) {
@@ -35,7 +35,7 @@ impl PipelineEventHandler for JsonEventHandler {
     }
 
     async fn stage_end(&self, stage: &Stage) {
-        log::info!("stage_end {}", stage.id());
+        log::info!("stage_end {}", stage.id);
     }
 
     async fn pipeline_finish(&self, _pipeline: &Pipeline) {

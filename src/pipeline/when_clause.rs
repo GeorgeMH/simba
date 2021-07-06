@@ -45,7 +45,7 @@ impl<S: ScriptEngine> PipelineStep for ExecuteWhenClausePipelineStep<S> {
 
             if !when_clause_result {
                 let skip_message = format!(
-                    "Skipped: When clause evaluated false: {}",
+                    "When clause evaluated false: {}",
                     when_clause.replace("\n", "\\n")
                 );
                 return Ok(TaskState::Skip(skip_message));

@@ -14,10 +14,10 @@ use crate::error;
 use crate::script::ScriptContext;
 
 mod executor;
-mod render_step;
-mod when_clause;
 mod http_call;
 mod post_script;
+mod render_step;
+mod when_clause;
 
 pub type NodeId = u64;
 
@@ -43,7 +43,7 @@ impl Pipeline {
         self.name.as_str()
     }
 
-    pub fn get_stage(&mut self, stage_name: &str) -> &mut Stage {
+    pub fn stage(&mut self, stage_name: &str) -> &mut Stage {
         if self.stages.contains_key(stage_name) {
             self.stages.get_mut(stage_name).unwrap()
         } else {
@@ -55,16 +55,22 @@ impl Pipeline {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stages(&self) -> Vec<&Stage> {
         self.stages.values().collect()
+    }
+
+    pub fn stages_mut(&mut self) -> Vec<&mut Stage> {
+        self.stages.iter_mut().map(|(_name, stage)| stage).collect()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Stage {
-    id: NodeId,
-    name: String,
-    steps: Vec<StepTask>,
+    pub id: NodeId,
+    pub name: String,
+    pub concurrent: bool,
+    pub tasks: Vec<StepTask>,
 }
 
 impl Stage {
@@ -72,24 +78,14 @@ impl Stage {
         Self {
             id: NODE_COUNTER.fetch_add(1, Ordering::Relaxed),
             name: name.to_string(),
-            steps: Vec::new(),
+            concurrent: false,
+            tasks: Vec::new(),
         }
     }
 
-    pub fn id(&self) -> NodeId {
-        self.id
-    }
-
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    pub fn add_task(&mut self, task: StepTask) {
-        self.steps.push(task);
-    }
-
-    pub fn tasks(&self) -> &[StepTask] {
-        self.steps.as_slice()
+    pub fn add_task(&mut self, mut task: StepTask) {
+        task.parent_id = self.id;
+        self.tasks.push(task);
     }
 }
 
