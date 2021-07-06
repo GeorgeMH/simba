@@ -92,9 +92,8 @@ where
         for stage in pipeline.stages_mut() {
             self.event_handler.stage_start(stage).await;
 
-            let mut pending_steps = Vec::new();
-
             if stage.concurrent {
+                let mut pending_steps = Vec::new();
                 for step_task in &mut stage.tasks {
                     let child_self: PipelineExecutor<E, S, T> = self.clone();
                     let mut child_task = step_task.clone();
@@ -151,7 +150,7 @@ where
                 .await;
 
             match task.apply(script_context, step_task).await {
-                // The step was processed successfully, and processing should continue to the next step
+                // The step was processed successfully and processing should continue to the next step
                 Ok(TaskState::Complete(msg)) => {
                     self.event_handler
                         .task_update(&step_task, TaskUpdate::Processing(msg))
@@ -162,11 +161,10 @@ where
                 // All other TaskState's are terminal
                 task_step_result => {
                     let execution_result = match task_step_result {
+                        // This is impossible
                         Ok(TaskState::Complete(_)) => {
-                            // This is impossible
                             panic!("TaskState::Complete should have already been handled")
                         }
-
                         Ok(TaskState::Skip(msg)) => ExecutionResult::Skipped(msg),
                         Ok(TaskState::Error(msg)) => ExecutionResult::Error(msg),
                         Err(error) => ExecutionResult::Error(format!("{}", error)),

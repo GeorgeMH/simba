@@ -38,6 +38,7 @@ struct ConsoleTaskState {
 struct StageState {
     pub name: String,
     pub concurrent: bool,
+    pub progress_bar: ProgressBar,
 }
 
 impl ConsoleEventHandler {
@@ -79,25 +80,25 @@ impl ConsoleEventHandler {
             .get(&task.parent_id)
             .unwrap_or_else(|| panic!("Unknown Stage: {}", task.parent_id));
 
-        let console_task_state = state_guard
+        let task_state = state_guard
             .task_states
             .get(&task.id)
             .unwrap_or_else(|| panic!("Unknown Task: {}", task.id));
+
+        stage_state.progress_bar.inc(1);
 
         match step_result.result {
             ExecutionResult::Skipped(skipped_reason) => {
                 update_task_style(
                     stage_state,
-                    &console_task_state,
+                    &task_state,
                     task,
                     FINISHED_TICK_STRINGS,
                     INIT_TICK_STRING_COLOR,
                     INIT_TICK_STRING_COLOR,
                 );
 
-                console_task_state
-                    .progress_bar
-                    .finish_with_message(skipped_reason);
+                task_state.progress_bar.finish_with_message(skipped_reason);
             }
             ExecutionResult::Error(error_msg) => {
                 // TODO: Can we have new lines displayed here?
@@ -105,13 +106,13 @@ impl ConsoleEventHandler {
 
                 update_task_style(
                     stage_state,
-                    &console_task_state,
+                    &task_state,
                     task,
                     FINISHED_TICK_STRINGS,
                     ERROR_COLOR,
                     ERROR_COLOR,
                 );
-                console_task_state.progress_bar.finish_with_message(message);
+                task_state.progress_bar.finish_with_message(message);
             }
             ExecutionResult::Response(response) => {
                 let (is_success, post_script_result_msg, spinner_color, msg_color) =
@@ -138,7 +139,7 @@ impl ConsoleEventHandler {
 
                 update_task_style(
                     stage_state,
-                    &console_task_state,
+                    &task_state,
                     task,
                     FINISHED_TICK_STRINGS,
                     spinner_color,
@@ -156,7 +157,7 @@ impl ConsoleEventHandler {
                     message = message.red();
                 }
 
-                console_task_state
+                task_state
                     .progress_bar
                     .finish_with_message(message.to_string());
             }
@@ -180,13 +181,16 @@ impl PipelineEventHandler for ConsoleEventHandler {
     }
 
     async fn stage_start(&self, stage: &Stage) {
+        if stage.tasks.is_empty() {
+            return; // Empty stage
+        }
         let mut state = self.get_state_mut().await;
 
-        let stage_state = StageState {
+        let mut stage_state = StageState {
             name: stage.name.clone(),
             concurrent: stage.concurrent,
+            progress_bar: ProgressBar::new(stage.tasks.len() as u64),
         };
-        state.stage_states.insert(stage.id, stage_state.clone());
 
         for task in &stage.tasks {
             let progress_bar = self.inner.multi_progress.add(ProgressBar::new_spinner());
@@ -203,6 +207,12 @@ impl PipelineEventHandler for ConsoleEventHandler {
 
             state.task_states.insert(task.id, task_state);
         }
+
+        // Add the stage progress bar after all it's child stages
+        stage_state.progress_bar = self.inner.multi_progress.add(stage_state.progress_bar);
+        update_stage_style(&stage_state, EXECUTING_TICK_STRING_COLOR);
+
+        state.stage_states.insert(stage.id, stage_state);
     }
 
     async fn task_update(&self, task: &StepTask, task_update: TaskUpdate) {
@@ -237,8 +247,18 @@ impl PipelineEventHandler for ConsoleEventHandler {
         }
     }
 
-    async fn stage_end(&self, _stage: &Stage) {
-        // let state = self.get_state().await;
+    async fn stage_end(&self, stage: &Stage) {
+        if stage.tasks.is_empty() {
+            return; // Nothing to do
+        }
+        let state = self.get_state().await;
+        let stage_state = state
+            .stage_states
+            .get(&stage.id)
+            .unwrap_or_else(|| panic!("Unknown Stage: {} {}", stage.id, stage.name));
+
+        // stage_state.progress_bar.finish();
+        stage_state.progress_bar.finish_and_clear();
     }
 
     async fn pipeline_finish(&self, pipeline: &Pipeline) {
@@ -251,7 +271,7 @@ async fn spawn_background_tasks(console_output_writer: ConsoleEventHandler) {
     // Create a task that will "tick" each running ProgressBar until all are stopped
     let tick_clone = console_output_writer.clone();
     tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(80));
+        let mut interval = tokio::time::interval(Duration::from_millis(160));
         loop {
             interval.tick().await;
 
@@ -263,6 +283,12 @@ async fn spawn_background_tasks(console_output_writer: ConsoleEventHandler) {
             for console_task_state in state.task_states.values() {
                 if !console_task_state.progress_bar.is_finished() {
                     console_task_state.progress_bar.tick();
+                }
+            }
+
+            for stage_state in state.stage_states.values() {
+                if !stage_state.progress_bar.is_finished() {
+                    stage_state.progress_bar.tick();
                 }
             }
         }
@@ -313,8 +339,22 @@ fn update_task_style(
     let pb_style = ProgressStyle::default_spinner()
         .tick_strings(tick_strings)
         .template(&*format!(
-            "{{spinner:.{}}} - Stage[{},{}] - {} - {{msg:.{}}}",
-            spinner_color, stage_state.name, stage_state.concurrent, step_task.step.desc, msg_color
+            "{{prefix:>12.{}.bold}} {{spinner:.{}}} - {} - {{msg:.{}}}",
+            spinner_color, spinner_color, step_task.step.desc, msg_color
         ));
+    task_state.progress_bar.set_prefix(stage_state.name.clone());
     task_state.progress_bar.set_style(pb_style);
+}
+
+fn update_stage_style(stage_state: &StageState, prefix_color: &str) {
+    let pb_style = ProgressStyle::default_spinner()
+        .template(&*format!(
+            "{{prefix:>12.{}.bold}} [{{bar:57}}] {{pos}}/{{len}} {{msg}}",
+            prefix_color
+        ))
+        .progress_chars("=> ");
+    stage_state
+        .progress_bar
+        .set_prefix(format!("{}", stage_state.name));
+    stage_state.progress_bar.set_style(pb_style);
 }

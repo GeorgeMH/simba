@@ -11,10 +11,9 @@ globals:
 stages:
   - name: "default"
   - name: "one"
-  - name: "two"
-    concurrent: true
+  - name: "Stage Two"
+#    concurrent: true
 
-# List of steps to execute in order
 steps:
   - desc: "Fetch Todos 1"
     method: "Get"
@@ -49,8 +48,8 @@ steps:
       ctx.title = parsedResponse.title
       return true
 
-  - desc: "Fetch TODOS 4"
-    stage: "two"
+  - desc: "Stage Two 1"
+    stage: "Stage Two"
     method: "Get"
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
@@ -58,8 +57,28 @@ steps:
       os.execute("sleep 2")
       return true
 
-  - desc: "Fetch TODOS 4"
-    stage: "two"
+  - desc: "Stage Two 2"
+    stage: "Stage Two"
+    method: "Get"
+    url: "{{ baseUrl }}/todos/1"
+    when: "return ctx.title ~= nil and ctx.title ~= ''"
+    post_script: |+
+      os.execute("sleep 2")
+      local parsedResponse = json.decode(ctx.http_response.body_string)
+      assert(ctx.title == parsedResponse.title .. "-", "Title mismatch")
+      return true
+
+  - desc: "Stage Two 3"
+    stage: "Stage Two"
+    method: "Get"
+    url: "{{ baseUrl }}/todos/1"
+    when: "return ctx.title ~= nil and ctx.title ~= ''"
+    post_script: |+
+      os.execute("sleep 2")
+      return true
+
+  - desc: "Stage Two 4"
+    stage: "Stage Two"
     method: "Get"
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
@@ -69,3 +88,20 @@ steps:
 
 
 
+  - desc: "Stage Two 3"
+    stage: "Stage Two"
+    method: "Get"
+    url: "{{ baseUrl }}/todos/1"
+    when: "return ctx.title ~= nil and ctx.title ~= ''"
+    post_script: |+
+      os.execute("sleep 2")
+      return true
+
+  - desc: "Stage Two 4"
+    stage: "Stage Two"
+    method: "Get"
+    url: "{{ baseUrl }}/todos/1"
+    when: "return ctx.title ~= nil and ctx.title ~= ''"
+    post_script: |+
+      os.execute("sleep 2")
+      return true
