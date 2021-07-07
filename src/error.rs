@@ -13,79 +13,79 @@ pub enum SimbaError {
         source: LuaError,
     },
 
-    #[error("SerDe Yaml Error {source}")]
+    #[error(transparent)]
     SerDeYamlError {
         #[from]
         source: serde_yaml::Error,
     },
 
-    #[error("SerDe JSON Error {source}")]
+    #[error(transparent)]
     SerDeJsonError {
         #[from]
         source: serde_json::Error,
     },
 
-    #[error("HTTP Error {source}")]
+    #[error(transparent)]
     HttpError {
         #[from]
         source: reqwest::Error,
     },
 
-    #[error("Invalid header name: {source}")]
+    #[error(transparent)]
     InvalidHeaderName {
         #[from]
         source: InvalidHeaderName,
     },
 
-    #[error("Invalid header value: {source}")]
+    #[error(transparent)]
     InvalidHeaderValue {
         #[from]
         source: InvalidHeaderValue,
     },
 
-    #[error("IO Error {source}")]
+    #[error(transparent)]
     IoError {
         #[from]
         source: std::io::Error,
     },
 
-    #[error("From Utf8 Error {source}")]
+    #[error(transparent)]
     FromUtf8Error {
         #[from]
         source: std::string::FromUtf8Error,
     },
 
-    #[error("Error setting logger: {source}")]
+    #[error(transparent)]
     SetLoggerError {
         #[from]
         source: log::SetLoggerError,
     },
 
-    #[error("Log configuration error: {source}")]
+    #[error(transparent)]
     ConfigErrors {
         #[from]
         source: log4rs::config::runtime::ConfigErrors,
     },
 
-    #[error("Receive Error: {source}")]
+    #[error(transparent)]
     TokioOneShotReceiveError {
         #[from]
         source: tokio::sync::oneshot::error::RecvError,
     },
 
-    #[error("Receive Error: {source}")]
+    #[error(transparent)]
     StdMpscReceiveError {
         #[from]
         source: std::sync::mpsc::RecvError,
     },
 
-    #[error("Send Error: {source}")]
+    #[error(transparent)]
     StdMpscSendError {
         #[from]
         source: std::sync::mpsc::SendError<LuaEvent>,
     },
 
-    #[error("Join Error: {source}")]
+    #[error(transparent)]
     JoinError {
         #[from]
         source: tokio::task::JoinError,

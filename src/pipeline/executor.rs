@@ -145,8 +145,9 @@ where
 
         let start_time = Instant::now();
         for task in tasks {
+            let task_name = format!("{}", task);
             self.event_handler
-                .task_update(&step_task, TaskUpdate::Processing(format!("{}", task)))
+                .task_update(&step_task, TaskUpdate::Processing(task_name.clone()))
                 .await;
 
             match task.apply(script_context, step_task).await {
@@ -165,9 +166,10 @@ where
                         Ok(TaskState::Complete(_)) => {
                             panic!("TaskState::Complete should have already been handled")
                         }
-                        Ok(TaskState::Skip(msg)) => ExecutionResult::Skipped(msg),
-                        Ok(TaskState::Error(msg)) => ExecutionResult::Error(msg),
-                        Err(error) => ExecutionResult::Error(format!("{}", error)),
+                        Ok(TaskState::Skip(msg)) => ExecutionResult::Skipped(format!("{} skipped: {}", task_name, msg)),
+                        Err(error) => {
+                            ExecutionResult::Error(format!("{} error: {}", task_name, error))
+                        }
                     };
 
                     let step_result = StepResult::new(

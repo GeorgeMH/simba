@@ -12,7 +12,7 @@ stages:
   - name: "default"
   - name: "one"
   - name: "Stage Two"
-#    concurrent: true
+    concurrent: true
 
 steps:
   - desc: "Fetch Todos 1"
@@ -29,10 +29,10 @@ steps:
     method: "Get"
     url: "{{ baseUrl }}/todos/1"
     when: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       return ctx.title ~= nil and ctx.title ~= ''
     post_script: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       local parsedResponse = json.decode(ctx.http_response.body_string)
       assert(ctx.title == parsedResponse.title, "Title mismatch")
       return true
@@ -43,7 +43,7 @@ steps:
     headers:
       Content-Type: "application/json"
     post_script: |+
-      os.execute("sleep 5")
+      --os.execute("sleep 5")
       local parsedResponse = json.decode(ctx.http_response.body_string)
       ctx.title = parsedResponse.title
       return true
@@ -54,7 +54,7 @@ steps:
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
     post_script: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       return true
 
   - desc: "Stage Two 2"
@@ -63,7 +63,7 @@ steps:
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
     post_script: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       local parsedResponse = json.decode(ctx.http_response.body_string)
       assert(ctx.title == parsedResponse.title .. "-", "Title mismatch")
       return true
@@ -74,16 +74,17 @@ steps:
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
     post_script: |+
-      os.execute("sleep 2")
-      return true
+      --os.execute("sleep 2")
+      --return false
+      error("Custom Error")
 
   - desc: "Stage Two 4"
     stage: "Stage Two"
     method: "Get"
     url: "{{ baseUrl }}/todos/1"
-    when: "return ctx.title ~= nil and ctx.title ~= ''"
+    when: "return false"
     post_script: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       return true
 
 
@@ -94,7 +95,7 @@ steps:
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
     post_script: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       return true
 
   - desc: "Stage Two 4"
@@ -103,5 +104,5 @@ steps:
     url: "{{ baseUrl }}/todos/1"
     when: "return ctx.title ~= nil and ctx.title ~= ''"
     post_script: |+
-      os.execute("sleep 2")
+      --os.execute("sleep 2")
       return true

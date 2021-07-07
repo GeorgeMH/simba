@@ -5,8 +5,8 @@ use crate::pipeline::{Pipeline, Stage, StepResult, StepTask};
 pub use crate::event::console::ConsoleEventHandler;
 pub use crate::event::json::JsonEventHandler;
 
-mod console;
-mod json;
+pub mod console;
+pub mod json;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]

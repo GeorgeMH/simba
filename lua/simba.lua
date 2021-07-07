@@ -3,29 +3,6 @@
 local M = {}
 
 function M.init_environment()
-    local env = {}
-    env.table = table
-    env.next = next
-    env.type = type
-    env.string = string
-    env.pairs = pairs
-    env.ipairs = ipairs
-    env.print = print
-    env.math = math
-    env.io = io
-    env.assert = assert
-    env.require = require
-    env.package = package
-    env.os = os
-
-    env.json = json
-    env._G = env
-    env.simba = M
-
-    -- overall state for the execution
-    env.ctx = {}
-
-    environment = env
 end
 
 function M.print_environment()
@@ -33,11 +10,7 @@ function M.print_environment()
         print("GLOBAL", k, v)
     end
 
-    for k,v in pairs(environment) do
-        print("ENV", k, v)
-    end
-
-    for k,v in pairs(environment.ctx) do
+    for k,v in pairs(ctx) do
         print("CTX", k, v)
     end
 end
@@ -45,7 +18,7 @@ end
 function M.eval_in_env_json(chunkName, code)
     --M.print_environment()
     -- Run the Lua code and get the result.
-    local func, err = load(code, chunkName, "t", environment)
+    local func, err = load(code, chunkName)
     if not func then
         return err
     end

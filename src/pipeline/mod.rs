@@ -94,7 +94,6 @@ impl Stage {
 pub enum TaskState {
     Complete(String),
     Skip(String),
-    Error(String),
 }
 
 #[derive(Debug, Clone)]

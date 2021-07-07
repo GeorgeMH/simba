@@ -7,6 +7,7 @@ use rlua::{Context, Function, Lua, Result as LuaResult, Table};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use crate::error::SimbaError;
 
 #[derive(Debug)]
 pub enum LuaEvent {
@@ -40,7 +41,12 @@ impl LuaScriptEngine {
 
 #[async_trait]
 impl ScriptEngine for LuaScriptEngine {
-    async fn execute(&self, context: ScriptContext, chunk_name: &str, code: &str) -> Result<ScriptResponse> {
+    async fn execute(
+        &self,
+        context: ScriptContext,
+        chunk_name: &str,
+        code: &str,
+    ) -> Result<ScriptResponse> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.inner.sender.send(LuaEvent::Execute {
             context,
@@ -54,11 +60,26 @@ impl ScriptEngine for LuaScriptEngine {
     }
 }
 
+// Lua isn't Sync or Send and does not provide async bindings,
+// so we create a dedicated thread
 fn start_lua_event_processor(receiver: std::sync::mpsc::Receiver<LuaEvent>) {
     std::thread::spawn(move || {
         if let Err(error) = lua_event_processor(&receiver) {
-            log::error!("Failed processing lua events {}", error);
+            match error {
+                SimbaError::StdMpscSendError{source} => {
+                    log::trace!("Shutting Down Lua Event Processor: {}", source);
+                }
+                SimbaError::StdMpscReceiveError { source} => {
+                    log::trace!("Shutting Down Lua Event Processor: {}", source);
+                }
+                error => {
+                    let message = format!("Fatal Lua Event Processor Error: {:?}", error);
+                    log::error!("{}", message.as_str());
+                    panic!("{}", message)
+                }
+            };
         }
+        log::info!("Stopping Lua Event Processor");
     });
 }
 
@@ -104,8 +125,6 @@ const LUA_SIMBA_MOD: &str = include_str!("../../lua/simba.lua");
 
 const SIMBA: &str = "simba";
 
-const ENVIRONMENT_NAME: &str = "environment";
-
 struct LuaContext {
     lua: RwLock<Lua>,
 }
@@ -138,6 +157,7 @@ impl LuaContext {
         chunk_name: &str,
         lua_code: &str,
     ) -> Result<ScriptResponse> {
+        log::info!("Evaluate Set Script Context {:?}", script_context);
         let lua = self.get_lua();
         Ok(lua.context(|ctx| {
             set_script_context(ctx, &script_context)?;
@@ -162,18 +182,16 @@ impl LuaContext {
 fn set_script_context(ctx: Context, script_context: &ScriptContext) -> LuaResult<()> {
     let globals = ctx.globals();
     let update_context_json: Function = get_simba_function(&globals, "set_as_json")?;
-    let environment: Table = globals.get(ENVIRONMENT_NAME)?;
     let json = serde_json::to_string_pretty(&script_context.data)
         .map_err(|err| rlua::Error::RuntimeError(format!("SetScriptContext Json {}", err)))?;
-    update_context_json.call((environment, "ctx", json))?;
+    update_context_json.call((globals, "ctx", json))?;
     LuaResult::Ok(())
 }
 
 fn get_script_context(ctx: Context) -> LuaResult<ScriptContext> {
     let globals = ctx.globals();
     let update_context_json: Function = get_simba_function(&globals, "get_as_json")?;
-    let environment: Table = globals.get(ENVIRONMENT_NAME)?;
-    let json: String = update_context_json.call((environment, "ctx"))?;
+    let json: String = update_context_json.call((globals, "ctx"))?;
     let script_context_data: HashMap<String, Value> =
         serde_json::from_str(&json).map_err(|err| {
             rlua::Error::RuntimeError(format!("GetScriptContextJson {}\n{}", err, json))
@@ -199,13 +217,12 @@ fn load_lua_module<'lua>(
     LuaResult::Ok(())
 }
 
-fn init_environment(ctx: Context) -> LuaResult<Table> {
+fn init_environment(ctx: Context) -> LuaResult<()> {
     let globals = ctx.globals();
     let init_environment: Function = get_simba_function(&globals, "init_environment")?;
 
     init_environment.call(())?;
-    let environment: Table = globals.get(ENVIRONMENT_NAME)?;
-    LuaResult::Ok(environment)
+    LuaResult::Ok(())
 }
 
 fn get_simba_function<'lua>(

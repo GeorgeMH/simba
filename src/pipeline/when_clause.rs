@@ -30,6 +30,7 @@ impl<S: ScriptEngine> PipelineStep for ExecuteWhenClausePipelineStep<S> {
         script_context: &mut ScriptContext,
         step_task: &mut StepTask,
     ) -> SimbaResult<TaskState> {
+        log::info!("When Clause: {:?}", script_context);
         let rendered_step = step_task
             .rendered_step
             .as_ref()
@@ -44,10 +45,7 @@ impl<S: ScriptEngine> PipelineStep for ExecuteWhenClausePipelineStep<S> {
             script_context.merge(updated_context)?;
 
             if !when_clause_result {
-                let skip_message = format!(
-                    "When clause evaluated false: {}",
-                    when_clause.replace("\n", "\\n")
-                );
+                let skip_message = format!("When clause evaluated false: {}", when_clause);
                 return Ok(TaskState::Skip(skip_message));
             }
         }

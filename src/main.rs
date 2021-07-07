@@ -13,6 +13,7 @@ use pipeline::PipelineExecutor;
 
 use crate::config::load_pipeline_def;
 pub use crate::error::SimbaResult as Result;
+use crate::event::console::PrintOptions;
 use crate::event::{ConsoleEventHandler, JsonEventHandler, PipelineEventHandlerHolder};
 use crate::script::lua::LuaScriptEngine;
 use crate::template::HandlebarsEngine;
@@ -54,8 +55,12 @@ struct Opts {
     log_file_path: Option<String>,
 }
 
+
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    setup_panic_hook();
+
     let opts: Opts = Opts::parse();
     configure_logging(&opts)?;
 
@@ -69,6 +74,14 @@ async fn main() -> Result<()> {
     executor.execute_pipeline(&pipeline, &opts.stages).await?;
 
     Ok(())
+}
+
+fn setup_panic_hook() {
+    let original_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        original_panic_hook(panic_info);
+        std::process::exit(1);
+    }));
 }
 
 fn configure_logging(opts: &Opts) -> Result<()> {
@@ -91,6 +104,13 @@ fn create_event_handler(opts: &Opts) -> PipelineEventHandlerHolder {
     if opts.json_output {
         PipelineEventHandlerHolder::Json(JsonEventHandler::new())
     } else {
-        PipelineEventHandlerHolder::Console(ConsoleEventHandler::new(opts.verbose))
+        // TODO: Configure each print option individually
+        let print_options = PrintOptions {
+            print_execution_tree: opts.verbose,
+            print_request_headers: opts.verbose,
+            print_response_headers: opts.verbose,
+            print_body: opts.verbose,
+        };
+        PipelineEventHandlerHolder::Console(ConsoleEventHandler::new(print_options))
     }
 }

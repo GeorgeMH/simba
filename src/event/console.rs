@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use console::style;
+use console::{pad_str, style, Alignment, Color};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::event::{PipelineEventHandler, TaskUpdate};
 use crate::pipeline::{ExecutionResult, NodeId, Pipeline, Stage, StepResult, StepTask};
 use async_trait::async_trait;
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -19,10 +20,19 @@ pub struct ConsoleEventHandler {
 }
 
 struct Inner {
-    print_pipeline_tree: bool,
+    print_options: PrintOptions,
     running: AtomicBool,
     multi_progress: MultiProgress,
     state: RwLock<ConsoleEventHandlerState>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct PrintOptions {
+    pub print_execution_tree: bool,
+    pub print_request_headers: bool,
+    pub print_response_headers: bool,
+    pub print_body: bool,
 }
 
 struct ConsoleEventHandlerState {
@@ -42,12 +52,13 @@ struct StageState {
 }
 
 impl ConsoleEventHandler {
-    pub fn new(print_pipeline_tree: bool) -> Self {
+    pub fn new(print_options: PrintOptions) -> Self {
+        let multi_progress = MultiProgress::new();
         Self {
             inner: Arc::new(Inner {
-                print_pipeline_tree,
+                print_options,
                 running: AtomicBool::new(true),
-                multi_progress: MultiProgress::new(),
+                multi_progress,
                 state: RwLock::new(ConsoleEventHandlerState {
                     stage_states: HashMap::new(),
                     task_states: HashMap::new(),
@@ -65,11 +76,11 @@ impl ConsoleEventHandler {
     }
 
     fn running(&self) -> bool {
-        self.inner.running.load(Ordering::Relaxed)
+        self.inner.running.load(Ordering::SeqCst)
     }
 
     fn set_running(&self, new_value: bool) {
-        self.inner.running.store(new_value, Ordering::Relaxed);
+        self.inner.running.store(new_value, Ordering::SeqCst);
     }
 
     async fn handle_finished_task(&self, task: &StepTask, step_result: StepResult) {
@@ -89,86 +100,113 @@ impl ConsoleEventHandler {
 
         match step_result.result {
             ExecutionResult::Skipped(skipped_reason) => {
-                update_task_style(
-                    stage_state,
-                    &task_state,
+                finish_with_message(
+                    &task_state.progress_bar,
                     task,
-                    FINISHED_TICK_STRINGS,
-                    INIT_TICK_STRING_COLOR,
-                    INIT_TICK_STRING_COLOR,
+                    INIT_TICK_STRINGS[0],
+                    Color::White,
+                    style(skipped_reason.as_str()).white().to_string().as_str(),
                 );
-
-                task_state.progress_bar.finish_with_message(skipped_reason);
             }
             ExecutionResult::Error(error_msg) => {
-                // TODO: Can we have new lines displayed here?
-                let message = error_msg.replace("\n", "\\n");
-
-                update_task_style(
-                    stage_state,
-                    &task_state,
+                finish_with_message(
+                    &task_state.progress_bar,
                     task,
-                    FINISHED_TICK_STRINGS,
-                    ERROR_COLOR,
-                    ERROR_COLOR,
+                    FINISHED_TICK_STRINGS[0],
+                    Color::Red,
+                    style(error_msg.as_str()).red().to_string().as_str(),
                 );
-                task_state.progress_bar.finish_with_message(message);
             }
             ExecutionResult::Response(response) => {
-                let (is_success, post_script_result_msg, spinner_color, msg_color) =
-                    match response.post_script_result {
-                        None => (true, "None".to_string(), SUCCESS_COLOR, SUCCESS_COLOR),
-                        Some(result_bool) => {
-                            if result_bool {
-                                (
-                                    result_bool,
-                                    result_bool.to_string(),
-                                    SUCCESS_COLOR,
-                                    SUCCESS_COLOR,
-                                )
-                            } else {
-                                (
-                                    result_bool,
-                                    result_bool.to_string(),
-                                    ERROR_COLOR,
-                                    ERROR_COLOR,
-                                )
+                let (post_script_result_msg, color) = match response.post_script_result {
+                    None => ("None".to_string(), Color::Green),
+                    Some(true) => ("true".to_string(), Color::Green),
+                    Some(false) => ("false".to_string(), Color::Yellow),
+                };
+
+                let message = style(format!(
+                    "Status: {}, Post Script: {}, {}ms",
+                    response.status, post_script_result_msg, response.execution_time_ms
+                ))
+                .fg(color);
+
+                let mut message = message.to_string();
+                let mut additional_msg = String::new();
+                if let Some(rendered_step) = &task.rendered_step {
+                    if self.inner.print_options.print_request_headers {
+                        if let Some(req_headers) = &rendered_step.headers {
+                            additional_msg += "Request Headers: \n";
+                            for (k, v) in req_headers {
+                                additional_msg += format!("{}{}: {}", indent(1), k, v).as_str()
                             }
                         }
-                    };
-
-                update_task_style(
-                    stage_state,
-                    &task_state,
-                    task,
-                    FINISHED_TICK_STRINGS,
-                    spinner_color,
-                    msg_color,
-                );
-
-                let mut message = style(format!(
-                    "Status: {}, Post Script: {}",
-                    response.status, post_script_result_msg
-                ));
-
-                if is_success {
-                    message = message.green();
-                } else {
-                    message = message.red();
+                    }
                 }
 
-                task_state
-                    .progress_bar
-                    .finish_with_message(message.to_string());
+                if self.inner.print_options.print_response_headers {
+                    additional_msg += "Response Headers:\n";
+                    for (k, v) in &response.headers {
+                        additional_msg += format!("{}{}: {}\n", indent(1), k, v).as_str();
+                    }
+                }
+
+                if self.inner.print_options.print_body {
+                    if let Some(body) = response.body_string {
+                        additional_msg += "Body:\n";
+                        additional_msg += body.as_str();
+                    }
+                }
+
+                if !additional_msg.is_empty() {
+                    message += "\n";
+                    message += additional_msg.as_str();
+                }
+
+                finish_with_message(
+                    &task_state.progress_bar,
+                    task,
+                    FINISHED_TICK_STRINGS[0],
+                    color,
+                    message.as_str(),
+                );
             }
         }
     }
 }
 
+fn finish_with_message(
+    progress_bar: &ProgressBar,
+    task: &StepTask,
+    spinner_str: &str,
+    color: Color,
+    message: &str,
+) {
+    let message = style(message);
+    let mut prefix = style(pad_str(
+        task.step.stage.as_str(),
+        12,
+        Alignment::Right,
+        None,
+    ))
+    .bold();
+    let mut spinner = style(spinner_str).bold();
+    prefix = prefix.fg(color);
+    spinner = spinner.fg(color);
+
+    let final_string = format!("{} {} - {} - {}", prefix, spinner, task.step.desc, message);
+
+    progress_bar.println(final_string);
+    progress_bar.finish_and_clear();
+}
+
+fn indent(levels: usize) -> String {
+    "    ".repeat(levels)
+}
+
 #[async_trait]
 impl PipelineEventHandler for ConsoleEventHandler {
     async fn pipeline_init(&self, pipeline: &Pipeline) {
-        if self.inner.print_pipeline_tree {
+        if self.inner.print_options.print_execution_tree {
             println!("Pipeline {}", pipeline.name());
             for stage in pipeline.stages() {
                 println!("\tStage: {}, Concurrent: {}", stage.name, stage.concurrent);
@@ -193,7 +231,8 @@ impl PipelineEventHandler for ConsoleEventHandler {
         };
 
         for task in &stage.tasks {
-            let progress_bar = self.inner.multi_progress.add(ProgressBar::new_spinner());
+            let progress_bar = ProgressBar::new_spinner();
+            let progress_bar = self.inner.multi_progress.add(progress_bar);
             progress_bar.set_message("Pending");
             let task_state = ConsoleTaskState { progress_bar };
             update_task_style(
@@ -257,7 +296,6 @@ impl PipelineEventHandler for ConsoleEventHandler {
             .get(&stage.id)
             .unwrap_or_else(|| panic!("Unknown Stage: {} {}", stage.id, stage.name));
 
-        // stage_state.progress_bar.finish();
         stage_state.progress_bar.finish_and_clear();
     }
 
@@ -267,11 +305,13 @@ impl PipelineEventHandler for ConsoleEventHandler {
     }
 }
 
+const PB_TICK_INTERVAL_MS: u64 = 80;
+
 async fn spawn_background_tasks(console_output_writer: ConsoleEventHandler) {
     // Create a task that will "tick" each running ProgressBar until all are stopped
     let tick_clone = console_output_writer.clone();
     tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(160));
+        let mut interval = tokio::time::interval(Duration::from_millis(PB_TICK_INTERVAL_MS));
         loop {
             interval.tick().await;
 
@@ -322,11 +362,7 @@ const EXECUTING_TICK_STRING: &[&str] = &[
 
 const INIT_TICK_STRING_COLOR: &str = "gray";
 const INIT_TICK_STRINGS: &[&str] = &["▱▱▱▱▱▱▱", "▱▱▱▱▱▱▱"];
-
 const FINISHED_TICK_STRINGS: &[&str] = &["▰▰▰▰▰▰▰", "▰▰▰▰▰▰▰"];
-
-const ERROR_COLOR: &str = "red";
-const SUCCESS_COLOR: &str = "green";
 
 fn update_task_style(
     stage_state: &StageState,
@@ -336,12 +372,13 @@ fn update_task_style(
     spinner_color: &str,
     msg_color: &str,
 ) {
+    let template_string = &*format!(
+        "{{prefix:>12.{}.bold}} {{spinner:.{}}} - {} - {{msg:.{}}}",
+        spinner_color, spinner_color, step_task.step.desc, msg_color
+    );
     let pb_style = ProgressStyle::default_spinner()
         .tick_strings(tick_strings)
-        .template(&*format!(
-            "{{prefix:>12.{}.bold}} {{spinner:.{}}} - {} - {{msg:.{}}}",
-            spinner_color, spinner_color, step_task.step.desc, msg_color
-        ));
+        .template(template_string);
     task_state.progress_bar.set_prefix(stage_state.name.clone());
     task_state.progress_bar.set_style(pb_style);
 }
@@ -355,6 +392,6 @@ fn update_stage_style(stage_state: &StageState, prefix_color: &str) {
         .progress_chars("=> ");
     stage_state
         .progress_bar
-        .set_prefix(format!("{}", stage_state.name));
+        .set_prefix(Cow::from(stage_state.name.clone()));
     stage_state.progress_bar.set_style(pb_style);
 }

@@ -35,6 +35,7 @@ impl PipelineStep for HttpCallPipelineStep {
         script_context: &mut ScriptContext,
         step_task: &mut StepTask,
     ) -> SimbaResult<TaskState> {
+        log::info!("HTTP Call: {:?}", script_context);
         let rendered_step = step_task
             .rendered_step
             .as_ref()

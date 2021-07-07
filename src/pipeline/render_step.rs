@@ -33,6 +33,7 @@ impl<T: TemplateEngine> PipelineStep for RenderPipelineStep<T> {
         script_context: &mut ScriptContext,
         step_task: &mut StepTask,
     ) -> Result<TaskState> {
+        log::info!("Render Step: {:?}", script_context);
         let url = self.template.render(&step_task.step.url, &script_context)?;
         let timeout_ms = step_task.step.timeout_ms;
 
