@@ -38,10 +38,6 @@ struct Opts {
     #[clap(short, long)]
     pipeline: String,
 
-    /// Output the response body
-    #[clap(short, long)]
-    output_response_body: bool,
-
     /// Output results as a JSON stream
     #[clap(short, long)]
     json_output: bool,
@@ -50,12 +46,10 @@ struct Opts {
     #[clap(short, long)]
     verbose: bool,
 
-    /// Path to event logs to
+    /// Path to write logs to
     #[clap(short, long)]
     log_file_path: Option<String>,
 }
-
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,14 +58,14 @@ async fn main() -> Result<()> {
     let opts: Opts = Opts::parse();
     configure_logging(&opts)?;
 
-    let pipeline = load_pipeline_def(&opts.pipeline).await?;
+    let pipeline_def = load_pipeline_def(&opts.pipeline).await?;
 
     let event_handler = create_event_handler(&opts);
     let script_engine = LuaScriptEngine::new()?;
     let template_engine = HandlebarsEngine::new();
 
     let executor = PipelineExecutor::new(event_handler, script_engine, template_engine).await?;
-    executor.execute_pipeline(&pipeline, &opts.stages).await?;
+    executor.execute_pipeline(&pipeline_def, &opts.stages).await?;
 
     Ok(())
 }

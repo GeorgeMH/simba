@@ -46,6 +46,8 @@ pub struct ScriptContext {
     data: HashMap<String, Value>,
 }
 
+const HTTP_RESPONSE_KEY: &str = "http_response";
+
 impl ScriptContext {
     pub fn new() -> Self {
         Self {
@@ -58,19 +60,19 @@ impl ScriptContext {
     }
 
     pub fn get_http_response(&self) -> Result<HttpResponse> {
-        self.get_required("http_response")
+        self.get_required(HTTP_RESPONSE_KEY)
     }
 
     pub fn set_http_response(
         &mut self,
         http_response: HttpResponse,
     ) -> Result<Option<HttpResponse>> {
-        self.set("http_response", http_response)
+        self.set(HTTP_RESPONSE_KEY, http_response)
     }
 
     pub fn get_required<T: DeserializeOwned>(&self, key: &str) -> Result<T> {
         let maybe_t = self.get(key)?;
-        maybe_t.ok_or_else(|| SimbaError::Other(format!("Expected {} in script context", key)))
+        maybe_t.ok_or_else(|| SimbaError::Other(format!("Missing key {} in script context", key)))
     }
 
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {

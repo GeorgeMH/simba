@@ -76,7 +76,7 @@ pub struct Stage {
 impl Stage {
     pub fn new(name: &str) -> Self {
         Self {
-            id: NODE_COUNTER.fetch_add(1, Ordering::Relaxed),
+            id: NODE_COUNTER.fetch_add(1, Ordering::SeqCst),
             name: name.to_string(),
             concurrent: false,
             tasks: Vec::new(),
@@ -107,7 +107,7 @@ pub struct StepTask {
 impl StepTask {
     pub fn new(step: PipelineStepDef, parent_id: NodeId) -> Self {
         Self {
-            id: NODE_COUNTER.fetch_add(1, Ordering::Relaxed),
+            id: NODE_COUNTER.fetch_add(1, Ordering::SeqCst),
             parent_id,
             step,
             rendered_step: None,
