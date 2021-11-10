@@ -5,15 +5,19 @@ name: "Test Pipeline"
 globals:
   protocol: https
   host: jsonplaceholder.typicode.com
+
+  # Global variables are evaluated in the order they are defined, so the following is valid
   baseUrl: "{{ protocol }}://{{ host }}"
   timeout_ms: 500
 
+# Complete list of stages, with optional per-stage configurations
 stages:
   - name: "default"
   - name: "one"
   - name: "Stage Two"
     concurrent: true
 
+# List of steps in all stages. If a step doesn't have a 'stage' defined, then it defaults to the the "default" stage.
 steps:
   - desc: "Fetch Todos 1"
     method: "Get"
@@ -32,7 +36,7 @@ steps:
       --os.execute("sleep 2")
       return ctx.title ~= nil and ctx.title ~= ''
     post_script: |+
-      --os.execute("sleep 2")
+      os.execute("sleep 2")
       local parsedResponse = json.decode(ctx.http_response.body_string)
       assert(ctx.title == parsedResponse.title, "Title mismatch")
       return true
