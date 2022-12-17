@@ -16,7 +16,7 @@ tokio = { version = "1.6.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
 serde_json = { version = "1.0.64", features = ["preserve_order"]}
-clap = "3.0.0-beta.2"
+clap = { version = "4.0.29", features = ["derive"] }
 rlua = "0.17.0"
 lazy_static = "1.4.0"
 async-trait = "0.1.50"

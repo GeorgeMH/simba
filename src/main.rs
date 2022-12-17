@@ -3,7 +3,7 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::non_ascii_literal)]
 
-use clap::{AppSettings, Clap};
+use clap::{Parser};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config, Root};
@@ -26,28 +26,27 @@ mod script;
 mod template;
 
 /// simba is a CLI based HTTP scripting engine
-#[derive(Clap, Debug)]
-#[clap(version = "0.1.0", author = "George Haney <george@georgemh.com>")]
-#[clap(setting = AppSettings::ColoredHelp)]
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
 struct Opts {
-    /// Stages execute from the pipeline
-    #[clap(short, long)]
+    /// Stages to execute from the pipeline
+    #[arg(short, long)]
     stages: Vec<String>,
 
     /// Path to the pipeline file
-    #[clap(short, long)]
+    #[arg(short, long)]
     pipeline: String,
 
     /// Output results as a JSON stream
-    #[clap(short, long)]
+    #[arg(short, long)]
     json_output: bool,
 
     /// Verbose output
-    #[clap(short, long)]
+    #[arg(short, long)]
     verbose: bool,
 
     /// Path to write logs to
-    #[clap(short, long)]
+    #[arg(short, long)]
     log_file_path: Option<String>,
 }
 
